@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
+from pydantic import BaseModel, Field, field_validator
 
 class PriceConstraint(BaseModel):
     """Price restriction extracted from the user's request.
@@ -11,8 +10,6 @@ class PriceConstraint(BaseModel):
     A null bound means that side of the range was not specified.
     The inclusive flags matter for phrases such as "menos de R$ 2.500".
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     min_price: Optional[float] = Field(default=None, ge=0)
     max_price: Optional[float] = Field(default=None, ge=0)
@@ -31,8 +28,6 @@ class PriceConstraint(BaseModel):
 
 class UserIntent(BaseModel):
     """Canonical representation of a natural-language shopping request."""
-
-    model_config = ConfigDict(extra="forbid")
 
     category: Optional[str] = Field(
         default=None,

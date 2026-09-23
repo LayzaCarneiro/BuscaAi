@@ -21,7 +21,7 @@ class IntentExtractor:
         model: Optional[str] = None,
         client: Optional[genai.Client] = None,
     ):
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
         self.client = client or genai.Client()
 
     def extract(self, user_text: str) -> UserIntent:
@@ -33,7 +33,6 @@ class IntentExtractor:
                 system_instruction=SYSTEM_PROMPT,
                 response_mime_type="application/json",
                 response_schema=UserIntent,
-                temperature=0,
             ),
         )
 
