@@ -1,0 +1,39 @@
+# Documentos locais de orientação e acompanhamento
+/AGENTS.md
+/README_BuscAI.md
+/task.md
+/implementado.md
+
+# Configuração privada; manter o modelo público
+.env
+.env.*
+!.env.example
+
+# Ambientes e artefatos Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Testes, cobertura e ferramentas locais
+.pytest_cache/
+pytest-cache-files-*/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Saídas locais da avaliação Gemini
+/data/predictions_*.jsonl
+
+# Arquivos pessoais de editores e logs
+.vscode/
+.idea/
+*.log
