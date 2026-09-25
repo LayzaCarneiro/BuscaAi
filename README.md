@@ -7,7 +7,7 @@ Projeto inicial para transformar consultas de compras em um `UserIntent` estrutu
 ```bash
 cd /Users/SEU_USUARIO/Downloads/userintent_project
 python3 -m venv path/to/venv
-source source path/to/venv/bin/activate
+source path/to/venv/bin/activate
 python3 -m pip install -U pip
 python3 -m pip install -r requirements.txt
 ```

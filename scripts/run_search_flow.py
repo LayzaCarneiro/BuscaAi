@@ -36,36 +36,59 @@ def main(
     parser.add_argument("text", help="Pedido do usuário em linguagem natural")
     parser.add_argument("--limit", type=int, default=10, help="Produtos por página (1 a 50)")
     parser.add_argument("--offset", type=int, default=0, help="Primeiro resultado da página")
+    parser.add_argument(
+        "--no-interactive",
+        dest="interactive",
+        action="store_false",
+        default=True,
+        help="Não pergunta mais detalhes ao usuário quando a intenção exige esclarecimento.",
+    )
     args = parser.parse_args(argv)
 
-    try:
-        result = run_search_flow(
-            args.text,
-            extractor=extractor,
-            catalog=catalog if catalog is not None else DummyJsonCatalog(),
-            category_map=DUMMYJSON_CATEGORY_MAP,
-            limit=args.limit,
-            offset=args.offset,
-        )
-    except Exception as exc:
-        print(f"Erro no fluxo de busca: {exc}", file=sys.stderr)
-        return 1
+    current_text = args.text
+    while True:
+        try:
+            result = run_search_flow(
+                current_text,
+                extractor=extractor,
+                catalog=catalog if catalog is not None else DummyJsonCatalog(),
+                category_map=DUMMYJSON_CATEGORY_MAP,
+                limit=args.limit,
+                offset=args.offset,
+            )
+        except Exception as exc:
+            print(f"Erro no fluxo de busca: {exc}", file=sys.stderr)
+            return 1
 
-    if result.clarification_question is not None:
-        print(f"Pergunta de esclarecimento: {result.clarification_question}")
-        return 0
+        if result.clarification_question is not None:
+            if not args.interactive:
+                print(f"Pergunta de esclarecimento: {result.clarification_question}")
+                return 0
 
-    assert result.search is not None
-    page = result.search.results
+            try:
+                answer = input(f"{result.clarification_question}\n> ").strip()
+            except EOFError:
+                print("Nenhuma resposta foi informada. Encerrando.", file=sys.stderr)
+                return 0
+
+            if not answer:
+                print("Resposta vazia. Encerrando sem busca.", file=sys.stderr)
+                return 0
+
+            current_text = f"{current_text} {answer}"
+            continue
+
+        break
+
     print(f"Intenção: {result.intent.query}")
-    print(f"Correspondências: {page.total_matches} | Página: offset={page.offset}, limit={page.limit}")
+    print(f"Correspondências: {result.search.results.total_matches} | Página: offset={result.search.results.offset}, limit={result.search.results.limit}")
     if result.search.unapplied_preferences:
         print("Preferências ainda não aplicadas: " + ", ".join(result.search.unapplied_preferences))
-    if not page.products:
+    if not result.search.results.products:
         print("Nenhum produto encontrado nesta página.")
         return 0
 
-    for product in page.products:
+    for product in result.search.results.products:
         currency = product.currency or "moeda não informada"
         print(f"ID: {product.id} | Nome: {product.title} | Preço: {product.price} ({currency})")
     return 0
