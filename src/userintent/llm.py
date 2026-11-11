@@ -22,7 +22,7 @@ class IntentExtractor:
         client: Optional[genai.Client] = None,
     ):
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-        self.client = client or genai.Client()
+        self.client = client or genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
     def extract(self, user_text: str) -> UserIntent:
         """Converte texto livre em UserIntent validado pelo Pydantic."""

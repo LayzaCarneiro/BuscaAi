@@ -1,4 +1,4 @@
-from userintent.schema import UserIntent
+from src.userintent.schema import UserIntent
 
 
 def test_schema_accepts_expected_shape():
