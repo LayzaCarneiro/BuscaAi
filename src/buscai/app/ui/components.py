@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import math
+from decimal import Decimal
 
 CART_SVG = (
     '<svg viewBox="0 0 64 48" width="{w}" height="{h}" shape-rendering="crispEdges" aria-hidden="true">'
@@ -263,3 +264,187 @@ def placeholder_box(title: str, text: str) -> str:
         </div></div>
         """
     )
+
+
+# ---------- Tela: Resultados ----------
+CURRENCY_SYMBOLS = {"BRL": "R$", "USD": "US$", "EUR": "€"}
+ATTR_LABELS = {
+    "brand": "Marca",
+    "rating": "Avaliação",
+    "stock": "Estoque",
+    "warranty": "Garantia",
+    "warrantyinformation": "Garantia",
+    "shipping": "Frete",
+    "shippinginformation": "Frete",
+    "availabilitystatus": "Disponibilidade",
+    "discountpercentage": "Desconto",
+    "weight": "Peso",
+    "sku": "SKU",
+    "tags": "Tags",
+}
+HIDDEN_ATTRS = {"description", "thumbnail", "image", "images", "reviews", "dimensions", "meta", "id", "title"}
+MAX_ATTRS = 6
+
+
+def currency_symbol(code: str | None) -> str:
+    code = (code or "").upper()
+    return CURRENCY_SYMBOLS.get(code, code)
+
+
+def format_money(value: Decimal | float | int | str, currency: str | None = None) -> str:
+    """1234.5 -> 'R$ 1.234,50' (formato brasileiro)."""
+    number = Decimal(str(value)).quantize(Decimal("0.01"))
+    text = f"{number:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{currency_symbol(currency)} {text}".strip()
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def _format_attr(key: str, value: object) -> str | None:
+    """Valor de atributo em texto curto; None se não for algo simples de mostrar."""
+    if value is None or value == "" or isinstance(value, dict):
+        return None
+    if isinstance(value, bool):
+        return "Sim" if value else "Não"
+    if isinstance(value, (list, tuple)):
+        if not all(isinstance(v, (str, int, float)) for v in value):
+            return None
+        text = ", ".join(str(v) for v in value)
+    elif isinstance(value, float):
+        text = f"{value:.1f}".replace(".", ",") if key.lower() == "rating" else f"{value:g}".replace(".", ",")
+        if key.lower() == "rating":
+            text += " ★"
+    else:
+        text = str(value)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def _attr_label(key: str) -> str:
+    return ATTR_LABELS.get(key.lower(), key.replace("_", " ").strip().capitalize())
+
+
+def _thumbnail(attrs: dict) -> str:
+    """Miniatura do produto: usa a URL do catálogo (se houver) ou um ícone."""
+    url = attrs.get("thumbnail") or attrs.get("image")
+    if isinstance(url, str) and url.startswith(("http://", "https://")):
+        return f'<img src="{html.escape(url, quote=True)}" alt="" loading="lazy">'
+    return "🛒"
+
+
+def product_row(product, index: int = 0) -> str:
+    attrs = dict(getattr(product, "attributes", None) or {})
+    items = []
+    for key, value in attrs.items():
+        if key.lower() in HIDDEN_ATTRS:
+            continue
+        shown = _format_attr(key, value)
+        if shown is not None:
+            items.append(f'<span class="attr"><b>{_text(_attr_label(key))}:</b> {_text(shown)}</span>')
+        if len(items) >= MAX_ATTRS:
+            break
+
+    desc = attrs.get("description")
+    desc_html = ""
+    if isinstance(desc, str) and desc.strip():
+        short = desc.strip() if len(desc.strip()) <= 160 else desc.strip()[:157] + "..."
+        desc_html = f'<div class="prod-desc">{_text(short)}</div>'
+
+    tags = []
+    if product.category:
+        tags.append(f'<span class="tag">{_text(str(product.category))}</span>')
+    if product.source:
+        tags.append(f'<span class="tag src">Fonte: {_text(str(product.source))}</span>')
+
+    alt = " alt" if index % 2 else ""
+    return _h(
+        f"""
+        <div class="prod{alt}">
+        <div class="prod-img">{_thumbnail(attrs)}</div>
+        <div class="prod-main">
+        <div class="prod-title">{_text(product.title)}</div>
+        <div class="prod-tags">{"".join(tags)}</div>
+        {desc_html}
+        <div class="prod-attrs">{"".join(items)}</div>
+        </div>
+        <div class="prod-price"><div class="price">{_text(format_money(product.price, product.currency))}</div>
+        <small>Cód. {_text(str(product.id))}</small></div>
+        </div>
+        """
+    )
+
+
+def results_panel(
+    page_products: list,
+    *,
+    count: int,
+    loaded: int,
+    total_matches: int,
+    filtered: bool,
+    first_index: int = 0,
+) -> str:
+    """Cabeçalho da janela + lista rolável com os produtos da página atual."""
+    header = (
+        f'<div class="win-h"><span>Resultados da busca</span>'
+        f'<span class="win-meta">{_plural(count, "produto", "produtos")}</span></div>'
+    )
+    note = ""
+    if total_matches > loaded:
+        note = (
+            f'<div class="res-note">O catálogo encontrou {total_matches} produtos; '
+            f"os {loaded} primeiros foram carregados.</div>"
+        )
+    if page_products:
+        body = "".join(product_row(p, first_index + i) for i, p in enumerate(page_products))
+    elif filtered:
+        body = (
+            '<div class="res-empty">Nenhum produto nessa faixa de preço.<br>'
+            "Ajuste ou limpe os filtros ao lado.</div>"
+        )
+    else:
+        body = '<div class="res-empty">Nenhum produto encontrado para essa busca.</div>'
+    return _h(f'{header}<div class="res-scroll">{note}{body}</div>')
+
+
+def page_info(start: int, end: int, count: int) -> str:
+    text = "Nenhum produto" if count == 0 else f"Exibindo {start}–{end} de {_plural(count, 'produto', 'produtos')}"
+    return f'<div class="page-info">{text}</div>'
+
+
+def _price_phrase(criteria, currency: str | None) -> str | None:
+    lo, hi = getattr(criteria, "min_price", None), getattr(criteria, "max_price", None)
+    if lo is None and hi is None:
+        return None
+    if lo is not None and hi is not None:
+        text = f"entre {format_money(lo, currency)} e {format_money(hi, currency)}"
+    elif hi is not None:
+        prefix = "até" if getattr(criteria, "max_inclusive", True) else "abaixo de"
+        text = f"{prefix} {format_money(hi, currency)}"
+    else:
+        prefix = "a partir de" if getattr(criteria, "min_inclusive", True) else "acima de"
+        text = f"{prefix} {format_money(lo, currency)}"
+    return text if getattr(criteria, "price_is_hard", True) else f"{text} (flexível)"
+
+
+def criteria_summary(criteria, unapplied: tuple[str, ...] | list[str], currency: str | None) -> str:
+    """O que o agente entendeu do pedido (vem de IntentSearchCriteria)."""
+    rows = [
+        ("Busca", criteria.query),
+        ("Categoria", criteria.category),
+        ("Preço", _price_phrase(criteria, currency)),
+        ("Marcas", ", ".join(criteria.brands)),
+        ("Sem as marcas", ", ".join(criteria.excluded_brands)),
+        ("Uso", ", ".join(criteria.use_cases)),
+        ("Perfil", ", ".join(criteria.profile_context)),
+        ("Exige", ", ".join(criteria.required_features)),
+        ("Prefere", ", ".join(criteria.preferred_features)),
+        ("Sem", ", ".join(criteria.excluded_features)),
+    ]
+    body = "".join(
+        f'<div class="crit-row"><b>{label}</b>{_text(str(value))}</div>' for label, value in rows if value
+    )
+    warn = ""
+    if unapplied:
+        warn = f'<div class="crit-warn"><b>Ainda não aplicado:</b> {_text(", ".join(unapplied))}</div>'
+    return _h(f'<div class="crit"><div class="crit-h">Sua busca</div><div class="crit-body">{body}{warn}</div></div>')
