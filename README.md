@@ -20,6 +20,15 @@ cp .env.example .env
 
 Preencha `GEMINI_API_KEY`. O modelo pode ser alterado em `GEMINI_MODEL`.
 
+
+Para executar os scripts sem precisar definir a variável PYTHONPATH, execute:
+
+```bash
+python -m pip install -e .
+```
+
+**Obs: Obrigatório a presença do arquivo `pyproject.toml` na raiz do projeto.**
+
 ## 2. Teste de um caso
 
 ```bash

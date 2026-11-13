@@ -166,7 +166,7 @@ class MercadoLivreCatalog(CatalogProvider):
             if product is not None:
                 products.append(product)
 
-        return ProductPage(products=tuple(products), total=total, skip=page_offset, limit=page_limit)
+        return ProductPage(products=tuple(products), total=int(total), skip=page_offset, limit=page_limit)
 
     # ------------------------------------------------------------------ busca e detalhes
 
@@ -266,11 +266,11 @@ class MercadoLivreCatalog(CatalogProvider):
             if name:
                 specs[name] = value
 
-        features = [
-            text
-            for feature in detail.get("main_features") or []
-            if isinstance(feature, dict) and (text := _clean(feature.get("text")))
-        ]
+        features: list[str] = []
+        for feature in detail.get("main_features") or []:
+            feature_text = _clean(feature.get("text")) if isinstance(feature, dict) else None
+            if feature_text:
+                features.append(feature_text)
 
         description = detail.get("short_description")
         if isinstance(description, dict):
