@@ -13,7 +13,11 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
-USE_MOCK = os.getenv("BUSCAI_USE_MOCK", "1") == "1"
+from dotenv import load_dotenv
+
+load_dotenv()
+USE_MOCK = os.getenv("BUSCAAI_USE_MOCK", "1") == "1"
+print("Valor de Use_Mock:", USE_MOCK)
 
 
 @dataclass(frozen=True)
