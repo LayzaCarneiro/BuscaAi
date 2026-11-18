@@ -48,7 +48,7 @@ def main(
             offset=args.offset,
         )
     except Exception as exc:
-        print(f"Erro no fluxo de busca: {exc}", file=sys.stderr)
+        print(f"Erro no fluxo de busca: \n   {exc.__class__.__name__}: {exc}", file=sys.stderr)
         return 1
 
     if result.clarification_question is not None:
