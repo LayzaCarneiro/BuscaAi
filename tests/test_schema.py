@@ -1,6 +1,3 @@
-<<<<<<< Updated upstream
-from userintent.schema import UserIntent
-=======
 from __future__ import annotations
 
 from google.genai import _transformers as genai_transformers
@@ -20,8 +17,8 @@ def _collect_keys(obj: object) -> set[str]:
         for item in obj:
             keys.update(_collect_keys(item))
     return keys
->>>>>>> Stashed changes
 
+from src.userintent.schema import UserIntent
 
 def test_schema_accepts_expected_shape():
     intent = UserIntent(

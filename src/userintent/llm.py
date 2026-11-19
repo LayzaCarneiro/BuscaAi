@@ -124,10 +124,6 @@ class IntentExtractor:
         sleep: Callable[[float], None] = time.sleep,
         logger: Optional[logging.Logger] = None,
     ):
-<<<<<<< Updated upstream
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-        self.client = client or genai.Client()
-=======
         self.timeout_seconds = _validate_positive_finite(timeout_seconds, "timeout_seconds")
         if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
             raise ValueError("max_retries deve ser um inteiro não negativo.")
@@ -138,7 +134,9 @@ class IntentExtractor:
             raise ValueError("max_backoff_seconds deve ser maior ou igual a base_backoff_seconds.")
         self._sleep = sleep
         self._logger = logger
->>>>>>> Stashed changes
+
+        self.client = client or genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
 
         active_settings = settings
         if active_settings is None and (model is None or client is None):

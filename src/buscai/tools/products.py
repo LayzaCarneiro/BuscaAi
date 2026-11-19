@@ -13,7 +13,7 @@ from buscai.catalog.errors import CatalogError
 
 
 CATALOG_PAGE_SIZE = 30
-MAX_RESULTS_PER_PAGE = 50
+MAX_RESULTS_PER_PAGE = 200
 
 
 @dataclass(frozen=True)
@@ -103,6 +103,7 @@ def search_products(
     expected_total: int | None = None
     while True:
         page = provider.list_products(limit=CATALOG_PAGE_SIZE, skip=skip)
+        print(f'\nDEBUG: Página de produtos: {page}')
         if expected_total is None:
             expected_total = page.total
         if page.total != expected_total or page.skip != skip:
