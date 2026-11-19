@@ -1,4 +1,8 @@
-"""Fornecedor de catálogo baseado na API pública DummyJSON."""
+"""Fornecedor de catálogo offline/legado baseado na API pública DummyJSON.
+
+Uso exclusivo para testes offline e compatibilidade passiva com o protótipo
+Streamlit (`src/buscai/app/`). Proibido no caminho de produção da API.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+<<<<<<< Updated upstream
+=======
+from . import CatalogProvider
+from .errors import CatalogError
+>>>>>>> Stashed changes
 from .models import Product, ProductPage
 
 
@@ -16,11 +25,16 @@ SOURCE = "dummyjson"
 REQUEST_TIMEOUT_SECONDS = 10
 
 
+<<<<<<< Updated upstream
 class CatalogError(RuntimeError):
     """Falha de comunicação ou resposta inválida do fornecedor."""
 
 
 class DummyJsonCatalog:
+=======
+class DummyJsonCatalog(CatalogProvider):
+    """Catálogo legado DummyJSON (isolado exclusivamente para testes/demonstração offline)."""
+>>>>>>> Stashed changes
     def __init__(self, *, currency: str | None = None) -> None:
         # A API não informa a moeda. Sem configuração explícita, ela é desconhecida.
         if currency is not None and (len(currency) != 3 or not currency.isascii() or not currency.isalpha()):

@@ -9,6 +9,7 @@ import pytest
 
 from buscai.catalog import CatalogProvider
 from buscai.catalog.dummyjson import CatalogError, DummyJsonCatalog
+from buscai.catalog.errors import CatalogError as ErrorsCatalogError
 
 
 def test_normalizes_products_and_preserves_page_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,3 +82,7 @@ def test_currency_is_unknown_until_explicitly_configured() -> None:
     assert DummyJsonCatalog().currency is None
     with pytest.raises(ValueError):
         DummyJsonCatalog(currency="R$")
+
+
+def test_catalog_error_reexport_matches_errors_module() -> None:
+    assert CatalogError is ErrorsCatalogError

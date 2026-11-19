@@ -3,11 +3,41 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "userintent-project"
-version = "0.1.0"
-description = "Etapa 1: extração e avaliação de intenção para um assistente de compras"
+name = "buscai"
+version = "0.2.0"
+description = "Backend B2B de busca semântica e recomendação de produtos para o BuscaAI"
+readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+    "google-genai>=1.0,<2",
+    "httpx>=0.28,<1",
+    "numpy>=2,<3",
+    "pydantic>=2.10,<3",
+    "python-dotenv>=1.0,<2",
+    "tenacity>=9,<10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+]
+semantic = [
+    "sentence-transformers>=3,<6",
+]
+semantic-onnx = [
+    "fastembed>=0.5,<1",
+]
+ui = [
+    "streamlit>=1.40,<1.67",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["buscai*", "userintent*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "ebay_live: testes opt-in que chamam a API real de produção da eBay (consomem cota)",
+]

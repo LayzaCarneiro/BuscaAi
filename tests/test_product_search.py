@@ -7,8 +7,9 @@ from decimal import Decimal
 import pytest
 
 from buscai.catalog import Product, ProductPage
-from buscai.catalog.dummyjson import CatalogError
+from buscai.catalog.errors import CatalogError
 from buscai.tools import search_products
+from buscai.tools.products import MAX_RESULTS_PER_PAGE
 from scripts.demo_catalog_search import main as demo_main
 from userintent.schema import UserIntent
 
@@ -96,7 +97,7 @@ def test_numeric_query_does_not_match_part_of_a_larger_number() -> None:
         {"query": "  "},
         {"query": "!!!"},
         {"query": "fone", "limit": 0},
-        {"query": "fone", "limit": 51},
+        {"query": "fone", "limit": MAX_RESULTS_PER_PAGE + 1},
         {"query": "fone", "offset": -1},
         {"query": "fone", "max_price": -1, "budget_currency": "BRL"},
         {"query": "fone", "max_price": 20},
@@ -163,3 +164,21 @@ def test_demo_uses_manual_intent_and_reports_empty_page(
 
     assert demo_main(["camera"], catalog=catalog) == 0
     assert "Nenhum produto nesta página." in capsys.readouterr().out
+
+
+def test_search_does_not_print_debug_payloads_to_stdout(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog = FakeCatalog([product(1, title="Notebook Sentinel")])
+
+    result = search_products("notebook", catalog=catalog)
+    captured = capsys.readouterr()
+
+    assert result.total_matches == 1
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_search_requires_explicit_catalog_without_dummyjson_fallback() -> None:
+    with pytest.raises(ValueError, match="catálogo explícito"):
+        search_products("fone")

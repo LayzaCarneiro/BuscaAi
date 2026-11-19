@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Callable
 
 from buscai.catalog import CatalogProvider, Product
-from buscai.catalog.dummyjson import CatalogError, DummyJsonCatalog
+from buscai.catalog.errors import CatalogError
 
 
 CATALOG_PAGE_SIZE = 30
@@ -94,7 +94,9 @@ def search_products(
             raise ValueError("budget_currency deve indicar a moeda do orçamento com três letras.")
         budget_currency = budget_currency.upper()
 
-    provider = catalog if catalog is not None else DummyJsonCatalog()
+    if catalog is None:
+        raise ValueError("Informe um fornecedor de catálogo explícito em `catalog`.")
+    provider = catalog
     matches: list[Product] = []
     terms = normalized_query.split()
     skip = 0
