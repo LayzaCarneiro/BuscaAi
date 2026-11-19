@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from . import CatalogProvider
 from .models import Product, ProductPage
 
 
@@ -20,7 +21,7 @@ class CatalogError(RuntimeError):
     """Falha de comunicação ou resposta inválida do fornecedor."""
 
 
-class DummyJsonCatalog:
+class DummyJsonCatalog(CatalogProvider):
     def __init__(self, *, currency: str | None = None) -> None:
         # A API não informa a moeda. Sem configuração explícita, ela é desconhecida.
         if currency is not None and (len(currency) != 3 or not currency.isascii() or not currency.isalpha()):
@@ -35,8 +36,9 @@ class DummyJsonCatalog:
 
         request = Request(
             f"{PRODUCTS_URL}?{urlencode({'limit': limit, 'skip': skip})}",
-            headers={"User-Agent": "BuscAI/0.1"},
+            headers={"User-Agent": "BuscAI/0.1"}
         )
+
         try:
             with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 payload = json.load(response, parse_float=Decimal)

@@ -19,6 +19,15 @@ load_dotenv()
 USE_MOCK = os.getenv("BUSCAAI_USE_MOCK", "1") == "1"
 print("Valor de Use_Mock:", USE_MOCK)
 
+DUMMYJSON_CATEGORY_MAP = {
+    "maquiagem": "beauty",
+    "batom": "beauty",
+    "perfume": "fragrances",
+    "notebook": "laptops",
+    "celular": "smartphones",
+    "smartphone": "smartphones"
+}
+
 
 @dataclass(frozen=True)
 class AgentReply:
@@ -64,7 +73,10 @@ def _real(text: str) -> AgentReply:
             intent,
             catalog=DummyJsonCatalog(currency="BRL"),
             budget_currency="BRL",
+            category_map=DUMMYJSON_CATEGORY_MAP,
+            limit=200
         )
+        print(f"DEBUG: resultado = {result}")
     except ClarificationRequired as exc:
         return AgentReply(kind="clarification", text=str(exc))
     except ConstraintUnavailableError:
@@ -78,7 +90,8 @@ def _real(text: str) -> AgentReply:
             kind="error",
             text="O catálogo não respondeu. Tente novamente em instantes.",
         )
-    except Exception:  # falha do modelo, JSON inválido etc.
+    except Exception as ex:  # falha do modelo, JSON inválido etc.
+        print(f"Erro: {ex}")
         return AgentReply(
             kind="error",
             text="Não consegui interpretar seu pedido agora. Tente novamente.",

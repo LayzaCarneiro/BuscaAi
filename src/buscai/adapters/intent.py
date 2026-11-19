@@ -83,6 +83,19 @@ def _matches_feature(feature: str, searchable: str) -> bool:
     available_terms = set(searchable.split())
     return all(term in available_terms for term in terms)
 
+def _stem(token: str) -> str:
+    if token.endswith("ies") and len(token) > 4:
+        return token[:-3] + "y"
+    if token.endswith("sses"):
+        return token[:-2]
+    if token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+        return token[:-1]
+    return token
+
+def _same_category(product_category: str, wanted: str) -> bool:
+    stem = lambda text: [_stem(t) for t in normalize_text(text).split()]
+    return stem(product_category) == stem(wanted)
+
 
 def _satisfies_constraints(
     product: Product, criteria: IntentSearchCriteria, budget_currency: str | None
@@ -90,7 +103,7 @@ def _satisfies_constraints(
     if criteria.category is not None:
         if product.category is None:
             raise ConstraintUnavailableError("O catálogo não informa a categoria de um produto candidato.")
-        if normalize_text(product.category) != normalize_text(criteria.category):
+        if not _same_category(product.category, criteria.category):
             return False
 
     if criteria.price_is_hard and (criteria.min_price is not None or criteria.max_price is not None):

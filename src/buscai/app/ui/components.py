@@ -332,6 +332,14 @@ def _thumbnail(attrs: dict) -> str:
         return f'<img src="{html.escape(url, quote=True)}" alt="" loading="lazy">'
     return "🛒"
 
+def _resolve_textcompl_by_label(lb, text):
+    match lb:
+        case "Desconto":
+            return text + "%"
+        case "Avaliação":
+            return text + " ★"
+        case _:
+            return text
 
 def product_row(product, index: int = 0) -> str:
     attrs = dict(getattr(product, "attributes", None) or {})
@@ -341,7 +349,9 @@ def product_row(product, index: int = 0) -> str:
             continue
         shown = _format_attr(key, value)
         if shown is not None:
-            items.append(f'<span class="attr"><b>{_text(_attr_label(key))}:</b> {_text(shown)}</span>')
+            label = _text(_attr_label(key))
+            text = _resolve_textcompl_by_label(label, _text(shown))
+            items.append(f'<span class="attr"><b>{label}:</b> {text}</span>')
         if len(items) >= MAX_ATTRS:
             break
 
