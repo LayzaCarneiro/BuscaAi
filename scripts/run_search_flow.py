@@ -1,10 +1,12 @@
-"""Demonstra texto → Gemini UserIntent → busca no catálogo DummyJSON."""
+"""Demonstração legada/offline: texto -> Gemini UserIntent -> catálogo DummyJSON (fora de produção)."""
 
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -34,9 +36,12 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(description="Extrai intenção com Gemini e consulta o catálogo")
     parser.add_argument("text", help="Pedido do usuário em linguagem natural")
-    parser.add_argument("--limit", type=int, default=10, help="Produtos por página (1 a 50)")
+    parser.add_argument("--limit", type=int, default=10, help="Produtos por página (1 a 200)")
     parser.add_argument("--offset", type=int, default=0, help="Primeiro resultado da página")
     args = parser.parse_args(argv)
+
+    if extractor is None:
+        load_dotenv(override=False)
 
     try:
         result = run_search_flow(

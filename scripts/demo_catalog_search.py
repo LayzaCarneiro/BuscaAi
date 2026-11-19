@@ -1,4 +1,4 @@
-"""Demonstra a busca a partir de um UserIntent manual, sem chamar Gemini."""
+"""Demonstração offline/legada de busca a partir de UserIntent manual (sem Gemini)."""
 
 from __future__ import annotations
 
@@ -14,15 +14,16 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from buscai.catalog import CatalogProvider
-from buscai.catalog.dummyjson import CatalogError
+from buscai.catalog.dummyjson import DummyJsonCatalog
+from buscai.catalog.errors import CatalogError
 from buscai.tools import search_products
 from userintent.schema import UserIntent
 
 
 def main(argv: list[str] | None = None, *, catalog: CatalogProvider | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Busca produtos sem chamar Gemini")
+    parser = argparse.ArgumentParser(description="Busca produtos em catálogo legado sem chamar Gemini")
     parser.add_argument("query", help="Termos da busca textual")
-    parser.add_argument("--limit", type=int, default=10, help="Resultados por página (1 a 50)")
+    parser.add_argument("--limit", type=int, default=10, help="Resultados por página (1 a 200)")
     parser.add_argument("--offset", type=int, default=0, help="Primeiro resultado da página")
     args = parser.parse_args(argv)
 
@@ -30,7 +31,8 @@ def main(argv: list[str] | None = None, *, catalog: CatalogProvider | None = Non
         # Nesta etapa, somente query é passada à busca; os demais campos do
         # UserIntent exigem o adaptador e a política de moeda da fase 2.
         intent = UserIntent(query=args.query)
-        result = search_products(intent.query, catalog=catalog, limit=args.limit, offset=args.offset)
+        selected_catalog = catalog if catalog is not None else DummyJsonCatalog()
+        result = search_products(intent.query, catalog=selected_catalog, limit=args.limit, offset=args.offset)
     except (CatalogError, ValidationError, ValueError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 1

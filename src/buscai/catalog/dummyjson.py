@@ -1,4 +1,8 @@
-"""Fornecedor de catálogo baseado na API pública DummyJSON."""
+"""Fornecedor de catálogo offline/legado baseado na API pública DummyJSON.
+
+Uso exclusivo para testes offline e compatibilidade passiva com o protótipo
+Streamlit (`src/buscai/app/`). Proibido no caminho de produção da API.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from . import CatalogProvider
+from .errors import CatalogError
+
+
 from .models import Product, ProductPage
 
 
@@ -16,9 +23,6 @@ PRODUCTS_URL = "https://dummyjson.com/products"
 SOURCE = "dummyjson"
 REQUEST_TIMEOUT_SECONDS = 10
 
-
-class CatalogError(RuntimeError):
-    """Falha de comunicação ou resposta inválida do fornecedor."""
 
 
 class DummyJsonCatalog(CatalogProvider):

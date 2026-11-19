@@ -1,0 +1,70 @@
+"""Pacote de processamento semântico e deduplicação híbrida em memória (Etapa 4)."""
+
+from .dedup import (
+    DeduplicationConfig,
+    DeduplicationResult,
+    DuplicateGroup,
+    PairClassification,
+    PairEvaluation,
+    ProductDeduplicator,
+)
+from .embeddings import (
+    ALTERNATIVE_MODEL_NAME,
+    RECOMMENDED_MODEL_NAME,
+    SUPPORTED_MODEL_SPECS,
+    DeterministicStubEmbeddingProvider,
+    EmbeddingError,
+    EmbeddingInferenceError,
+    EmbeddingModelInfo,
+    EmbeddingModelLoadError,
+    EmbeddingProvider,
+    EmbeddingService,
+    FastEmbedEmbeddingProvider,
+    SentenceTransformerEmbeddingProvider,
+    clamp_unit_scores,
+    cosine_similarity_matrix,
+    l2_normalize,
+    resolve_model_spec,
+)
+from .pipeline import SemanticProcessingResult, SemanticSearchProcessor, merge_search_responses
+from .ranker import InMemorySemanticRanker, SemanticScoredCandidate
+from .representation import (
+    ProductStructuredAttributes,
+    build_candidate_embedding_text,
+    build_query_embedding_text,
+    extract_product_attributes,
+)
+
+__all__ = [
+    "ALTERNATIVE_MODEL_NAME",
+    "DeduplicationConfig",
+    "DeduplicationResult",
+    "DeterministicStubEmbeddingProvider",
+    "DuplicateGroup",
+    "EmbeddingError",
+    "EmbeddingInferenceError",
+    "EmbeddingModelInfo",
+    "EmbeddingModelLoadError",
+    "EmbeddingProvider",
+    "EmbeddingService",
+    "FastEmbedEmbeddingProvider",
+    "InMemorySemanticRanker",
+    "PairClassification",
+    "PairEvaluation",
+    "ProductDeduplicator",
+    "ProductStructuredAttributes",
+    "RECOMMENDED_MODEL_NAME",
+    "SUPPORTED_MODEL_SPECS",
+    "SemanticProcessingResult",
+    "SemanticScoredCandidate",
+    "SemanticSearchProcessor",
+    "SentenceTransformerEmbeddingProvider",
+    "build_candidate_embedding_text",
+    "build_query_embedding_text",
+    "clamp_unit_scores",
+    "cosine_similarity_matrix",
+    "extract_product_attributes",
+    "l2_normalize",
+    "merge_search_responses",
+    "resolve_model_spec",
+]

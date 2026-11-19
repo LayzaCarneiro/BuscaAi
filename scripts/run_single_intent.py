@@ -10,10 +10,13 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from dotenv import load_dotenv
+
 from userintent.llm import IntentExtractor
 
 
 def main() -> None:
+    load_dotenv(override=False)
     user_text = "Quero um notebook até R$ 4.000 para programar e jogar casualmente"
     intent = IntentExtractor().extract(user_text)
     print(json.dumps(intent.model_dump(mode="json"), ensure_ascii=False, indent=2))

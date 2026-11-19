@@ -9,7 +9,7 @@ import pytest
 from buscai.agent import run_search_flow
 from buscai.adapters import ConstraintUnavailableError
 from buscai.catalog import Product, ProductPage
-from buscai.catalog.dummyjson import CatalogError
+from buscai.catalog.errors import CatalogError
 from scripts.run_search_flow import main as demo_main
 from userintent.schema import UserIntent
 
