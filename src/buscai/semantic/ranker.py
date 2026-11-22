@@ -26,6 +26,7 @@ class SemanticScoredCandidate(BaseModel):
 
     candidate: Candidate
     semantic_score: float = Field(ge=0.0, le=1.0)
+    product_group_id: str | None = None
 
 
 class InMemorySemanticRanker:

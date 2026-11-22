@@ -135,9 +135,6 @@ class IntentExtractor:
         self._sleep = sleep
         self._logger = logger
 
-        self.client = client or genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-
         active_settings = settings
         if active_settings is None and (model is None or client is None):
             active_settings = load_settings(load_dotenv_file=False)

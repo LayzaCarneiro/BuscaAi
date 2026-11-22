@@ -282,3 +282,116 @@ def test_merge_explicit_budget_precedence_and_edge_cases() -> None:
     for bad in (0, -100, True, "NaN", "abc"):
         with pytest.raises(ValueError):
             merge_explicit_budget(base_no_price, bad)  # type: ignore[arg-type]
+
+
+def test_intent_extractor_init_with_injected_client_does_not_instantiate_genai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_if_called(*_args, **_kwargs):
+        raise AssertionError("genai.Client não deve ser chamado quando client é injetado.")
+
+    monkeypatch.setattr("userintent.llm.genai.Client", _fail_if_called)
+    stub = _StubClient(
+        lambda **_kwargs: SimpleNamespace(
+            parsed=UserIntent(category="notebook", query="notebook Dell"),
+            text=None,
+        )
+    )
+    extractor = IntentExtractor(model="gemini-3.5-flash-lite", client=stub)
+    assert extractor.client is stub
+    assert extractor.extract("notebook Dell").category == "notebook"
+
+
+def test_intent_extractor_init_from_settings_and_without_name_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_init: list[dict[str, object]] = []
+
+    class _FakeGenAIClient:
+        def __init__(self, *, api_key: str | None = None) -> None:
+            captured_init.append({"api_key": api_key})
+            if not api_key:
+                raise ValueError("Missing key inputs argument!")
+            self.models = _StubModels(
+                lambda **_kwargs: SimpleNamespace(
+                    parsed=UserIntent(category="smartphone", query="smartphone Samsung"),
+                    text=None,
+                )
+            )
+
+    monkeypatch.setattr("userintent.llm.genai.Client", _FakeGenAIClient)
+
+    # Sem GEMINI_API_KEY no ambiente e sem client injetado: deve levantar IntentExtractionError (nunca NameError).
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(IntentExtractionError, match="GEMINI_API_KEY"):
+        IntentExtractor()
+
+    settings_missing = load_settings(environ={})
+    with pytest.raises(IntentExtractionError, match="GEMINI_API_KEY"):
+        IntentExtractor(settings=settings_missing)
+
+    # Inicialização por configuração válida cria o cliente simulado com a chave do Settings e opera offline.
+    settings_ok = load_settings(
+        environ={
+            "GEMINI_API_KEY": "AIzaOfflineTestKey1234567890",
+            "GEMINI_MODEL": "gemini-3.5-flash-lite",
+        }
+    )
+    extractor = IntentExtractor.from_settings(settings_ok)
+    assert extractor.model == "gemini-3.5-flash-lite"
+    assert isinstance(extractor.client, _FakeGenAIClient)
+    assert captured_init[-1] == {"api_key": "AIzaOfflineTestKey1234567890"}
+
+    intent = extractor.extract("Quero um smartphone Samsung")
+    assert intent.category == "smartphone"
+    assert intent.query == "smartphone Samsung"
+
+
+def test_a4_merge_explicit_budget_cross_currency_preserves_strictest_constraint() -> None:
+    from buscai.pricing import CurrencyConverter, FixedEnvExchangeRateProvider
+
+    converter = CurrencyConverter(FixedEnvExchangeRateProvider(rate="5.50"))
+
+    # Teto rígido em USD (300 USD = 1650 BRL) é mais restritivo que budget_brl=5000 -> preserva 300 USD!
+    usd_tight_intent = UserIntent(
+        category="notebook",
+        query="notebook",
+        price=PriceConstraint(max_price=300, max_inclusive=False, is_hard_constraint=True, currency="USD"),
+    )
+    res_keep_usd = merge_explicit_budget(usd_tight_intent, 5000, currency="BRL", currency_converter=converter)
+    assert res_keep_usd.price.currency == "USD"
+    assert res_keep_usd.price.max_price == 300.0
+    assert res_keep_usd.price.max_inclusive is False
+    assert res_keep_usd.price.is_hard_constraint is True
+
+    # budget_brl=1100 BRL (200 USD) é mais restritivo que 300 USD -> aplica 1100 BRL e converte min_price.
+    usd_range_intent = UserIntent(
+        category="notebook",
+        query="notebook",
+        price=PriceConstraint(min_price=100, max_price=300, is_hard_constraint=True, currency="USD"),
+    )
+    res_tighter_brl = merge_explicit_budget(usd_range_intent, 1100, currency="BRL", currency_converter=converter)
+    assert res_tighter_brl.price.currency == "BRL"
+    assert res_tighter_brl.price.max_price == 1100.0
+    assert res_tighter_brl.price.min_price == 550.0
+
+    # Conflito: min_price 400 USD (2200 BRL) > budget_brl 1500 BRL -> ValueError
+    usd_min_conflict = UserIntent(
+        category="notebook",
+        query="notebook",
+        price=PriceConstraint(min_price=400, is_hard_constraint=True, currency="USD"),
+    )
+    with pytest.raises(ValueError, match="menor que o valor mínimo"):
+        merge_explicit_budget(usd_min_conflict, 1500, currency="BRL", currency_converter=converter)
+
+    # Sem conversor cambial ou moeda não suportada (EUR), combinação rígida divergente é rejeitada.
+    with pytest.raises(ValueError, match="conversor cambial"):
+        merge_explicit_budget(usd_tight_intent, 5000, currency="BRL")
+
+    eur_intent = UserIntent(
+        category="notebook",
+        query="notebook",
+        price=PriceConstraint(max_price=300, is_hard_constraint=True, currency="EUR"),
+    )
+    with pytest.raises(ValueError, match="conversor cambial"):
+        merge_explicit_budget(eur_intent, 5000, currency="BRL", currency_converter=converter)

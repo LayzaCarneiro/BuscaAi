@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 import math
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Protocol
 
 from .schema import PriceConstraint, UserIntent
+
+
+class CurrencyConverterLike(Protocol):
+    """Protocolo mínimo para conversão bidirecional USD <-> BRL sem acoplamento circular."""
+
+    def usd_to_brl(self, amount_usd: Decimal | int | str) -> object:
+        ...
+
+    def brl_to_usd(self, amount_brl: Decimal | int | str) -> Decimal:
+        ...
+
+
+def _convert_amount(
+    amount: Decimal,
+    *,
+    from_currency: str,
+    to_currency: str,
+    currency_converter: CurrencyConverterLike,
+) -> Decimal:
+    if from_currency == to_currency:
+        return amount
+    if from_currency == "USD" and to_currency == "BRL":
+        converted = currency_converter.usd_to_brl(amount)
+        raw = getattr(converted, "amount", converted)
+        return Decimal(str(raw))
+    if from_currency == "BRL" and to_currency == "USD":
+        return currency_converter.brl_to_usd(amount)
+    raise ValueError(
+        f"Conversão cambial não suportada entre {from_currency} e {to_currency}."
+    )
 
 
 def _parse_positive_budget(value: Decimal | int | float | str) -> Decimal:
@@ -51,6 +82,7 @@ def merge_explicit_budget(
     budget_brl: Decimal | int | float | str | None,
     *,
     currency: str = "BRL",
+    currency_converter: CurrencyConverterLike | None = None,
 ) -> UserIntent:
     """Concilia deterministicamente o orçamento explícito com `intent.price`.
 
@@ -61,8 +93,9 @@ def merge_explicit_budget(
     - Se o texto já trouxe teto rígido na mesma moeda (ou sem moeda explícita),
       prevalece o menor teto (`min(text_max, budget_brl)`); em caso de empate,
       preserva-se `max_inclusive=False` quando vindo de expressões como "menos de".
-    - Se o texto trouxe teto em moeda diferente, o orçamento explícito prevalece na
-      moeda informada quando não houver `min_price` conflitante.
+    - Se o texto trouxe restrições em moeda diferente, exige `currency_converter`
+      compatível (BRL <-> USD) para comparar valores na mesma base, preservando sempre
+      o teto rígido mais restritivo; rejeita combinações ambíguas sem conversor.
     """
     if budget_brl is None:
         return intent
@@ -72,17 +105,88 @@ def merge_explicit_budget(
     price = intent.price
     text_currency = price.currency
 
-    # Caso o texto especifique explicitamente outra moeda, evita combinar limites
-    # heterogêneos antes da conversão centralizada.
     if text_currency is not None and text_currency != norm_currency:
-        if price.min_price is not None:
-            raise ValueError(
-                f"Valor mínimo em {text_currency} conflita com orçamento explícito em {norm_currency}."
+        has_text_bounds = price.min_price is not None or price.max_price is not None
+        if not has_text_bounds:
+            merged_price = PriceConstraint(
+                min_price=None,
+                max_price=float(explicit_max),
+                min_inclusive=True,
+                max_inclusive=True,
+                is_hard_constraint=True,
+                currency=norm_currency,
             )
+            return intent.model_copy(update={"price": merged_price})
+
+        if currency_converter is None or {text_currency, norm_currency} != {"BRL", "USD"}:
+            if price.min_price is not None or (price.max_price is not None and price.is_hard_constraint):
+                raise ValueError(
+                    f"Não é possível conciliar orçamento em {text_currency} com {norm_currency} "
+                    "sem conversor cambial compatível."
+                )
+            merged_price = PriceConstraint(
+                min_price=None,
+                max_price=float(explicit_max),
+                min_inclusive=True,
+                max_inclusive=True,
+                is_hard_constraint=True,
+                currency=norm_currency,
+            )
+            return intent.model_copy(update={"price": merged_price})
+
+        min_in_norm: float | None = None
+        if price.min_price is not None:
+            min_in_norm = float(
+                _convert_amount(
+                    Decimal(str(price.min_price)),
+                    from_currency=text_currency,
+                    to_currency=norm_currency,
+                    currency_converter=currency_converter,
+                )
+            )
+
+        if price.max_price is not None and price.is_hard_constraint:
+            text_max_in_norm = _convert_amount(
+                Decimal(str(price.max_price)),
+                from_currency=text_currency,
+                to_currency=norm_currency,
+                currency_converter=currency_converter,
+            )
+            explicit_cmp = explicit_max.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            text_cmp = text_max_in_norm.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            if text_cmp < explicit_cmp:
+                # Mantém integralmente o teto rígido mais restritivo na moeda original do texto.
+                _validate_min_against_max(
+                    price.min_price,
+                    price.min_inclusive,
+                    Decimal(str(price.max_price)),
+                    price.max_inclusive,
+                )
+                return intent
+
+            effective_max_inclusive = price.max_inclusive if text_cmp == explicit_cmp else True
+            _validate_min_against_max(
+                min_in_norm,
+                price.min_inclusive,
+                explicit_max,
+                effective_max_inclusive,
+            )
+            merged_price = PriceConstraint(
+                min_price=min_in_norm,
+                max_price=float(explicit_max),
+                min_inclusive=price.min_inclusive,
+                max_inclusive=effective_max_inclusive,
+                is_hard_constraint=True,
+                currency=norm_currency,
+            )
+            return intent.model_copy(update={"price": merged_price})
+
+        _validate_min_against_max(min_in_norm, price.min_inclusive, explicit_max, True)
         merged_price = PriceConstraint(
-            min_price=None,
+            min_price=min_in_norm,
             max_price=float(explicit_max),
-            min_inclusive=True,
+            min_inclusive=price.min_inclusive,
             max_inclusive=True,
             is_hard_constraint=True,
             currency=norm_currency,

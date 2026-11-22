@@ -159,15 +159,17 @@ def test_stage4_integrated_mocked_flow_dedup_and_preserves_variants() -> None:
             request_id="req-s4-int",
         )
 
-        # Duplicatas do iPhone 15 256GB agrupadas (2 removidos: ip256-b e ip256-a repetido),
-        # mas iPhone 15 128GB e iPhone 15 Pro 256GB preservados como produtos distintos/semelhantes.
+        # Duplicata exata do mesmo item_id v1|ip256-a|0 (vinda da query alternativa) é colapsada (1 removido),
+        # mas as 2 ofertas distintas do iPhone 15 256GB (ip256-a e ip256-b) permanecem disponíveis (A1)
+        # agrupadas em um único DuplicateGroup, junto com iPhone 15 128GB e iPhone 15 Pro 256GB.
         assert sem_res.input_count == 5
-        assert sem_res.removed_duplicates_count == 2
-        assert sem_res.output_count == 3
+        assert sem_res.removed_duplicates_count == 1
+        assert sem_res.output_count == 4
+        assert sem_res.unique_products_count == 3
         kept_ids = {c.item_id for c in sem_res.candidates}
-        assert "v1|ip128|0" in kept_ids
-        assert "v1|ip256-pro|0" in kept_ids
-        assert ("v1|ip256-a|0" in kept_ids) or ("v1|ip256-b|0" in kept_ids)
+        assert kept_ids == {"v1|ip256-a|0", "v1|ip256-b|0", "v1|ip128|0", "v1|ip256-pro|0"}
+        assert len(sem_res.product_groups) == 3
+        assert any(set(g.duplicate_item_ids) == {"v1|ip256-a|0", "v1|ip256-b|0"} for g in sem_res.product_groups)
         assert sem_res.scored_candidates[0].semantic_score >= sem_res.scored_candidates[-1].semantic_score
     finally:
         backend.close()

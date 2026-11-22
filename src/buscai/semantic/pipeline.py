@@ -11,10 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from buscai.config import Settings
 from buscai.observability import log_operational_event
 from buscai.search.models import Candidate, SearchResponse
-from buscai.semantic.dedup import DeduplicationConfig, DeduplicationResult, ProductDeduplicator
+from buscai.semantic.dedup import DeduplicationConfig, DeduplicationResult, DuplicateGroup, ProductDeduplicator
 from buscai.semantic.embeddings import EmbeddingProvider, EmbeddingService
 from buscai.semantic.ranker import InMemorySemanticRanker, SemanticScoredCandidate
-from buscai.semantic.representation import build_query_embedding_text
+from buscai.semantic.representation import build_semantic_query_text
 
 
 def merge_search_responses(responses: Sequence[SearchResponse]) -> tuple[Candidate, ...]:
@@ -30,15 +30,17 @@ def merge_search_responses(responses: Sequence[SearchResponse]) -> tuple[Candida
 
 
 class SemanticProcessingResult(BaseModel):
-    """Resultado transitório da Etapa 4 sem retenção de vetores de embeddings."""
+    """Resultado transitório da Etapa 4 preservando todas as ofertas distintas e grupos de produto."""
 
     model_config = ConfigDict(frozen=True)
 
     candidates: tuple[Candidate, ...] = ()
     scored_candidates: tuple[SemanticScoredCandidate, ...] = ()
+    product_groups: tuple[DuplicateGroup, ...] = ()
     deduplication: DeduplicationResult = Field(default_factory=DeduplicationResult)
     input_count: int = Field(default=0, ge=0)
     output_count: int = Field(default=0, ge=0)
+    unique_products_count: int = Field(default=0, ge=0)
     removed_duplicates_count: int = Field(default=0, ge=0)
     embedding_model: str = ""
 
@@ -82,48 +84,63 @@ class SemanticSearchProcessor:
         query_text: str,
         candidates_or_responses: Sequence[Candidate] | Sequence[SearchResponse],
         *,
+        intent: object | None = None,
         category_hint: str | None = None,
         request_id: str | None = None,
     ) -> SemanticProcessingResult:
-        """Executa embedding transitório, deduplicação híbrida e ordenação semântica em memória."""
-        clean_query = build_query_embedding_text(query_text)
+        """Executa deduplicação de ofertas/produtos e ordenação semântica em memória."""
+        clean_query = build_semantic_query_text(query_text, intent=intent)
         raw_candidates = self._normalize_inputs(candidates_or_responses)
-        model_name = self._embedding_service.model_info().model_name
+        model_info = self._embedding_service.model_info()
+        model_name = model_info.model_name
 
         if not raw_candidates:
             return SemanticProcessingResult(embedding_model=model_name)
 
         started = time.monotonic()
 
-        # Gera embeddings dos candidatos uma única vez em lote e mantém o array somente
-        # durante esta chamada.
-        candidate_vectors = self._embedding_service.embed_candidates(raw_candidates, request_id=request_id)
-        dedup_result = self._deduplicator.deduplicate(
-            raw_candidates,
-            vectors=candidate_vectors,
-            category_hint=category_hint,
-            request_id=request_id,
-        )
+        # Quando o modelo exige prefixos assimétricos (ex.: E5 `query:` vs `passage:`),
+        # a deduplicação usa similaridade simétrica (`query:`) e o ranking usa `passage:`,
+        # conforme model card oficial. Caso contrário, reaproveita os vetores em um único lote.
+        if model_info.requires_prefixes:
+            dedup_result = self._deduplicator.deduplicate(
+                raw_candidates,
+                category_hint=category_hint,
+                request_id=request_id,
+            )
+            canonical_vectors = None
+        else:
+            candidate_vectors = self._embedding_service.embed_candidates(
+                raw_candidates,
+                mode="retrieval_document",
+                category_hint=category_hint,
+                request_id=request_id,
+            )
+            dedup_result = self._deduplicator.deduplicate(
+                raw_candidates,
+                vectors=candidate_vectors,
+                category_hint=category_hint,
+                request_id=request_id,
+            )
 
-        # Reaproveita os vetores dos candidatos canônicos escolhidos para evitar segunda inferência.
-        idx_by_identity = {id(cand): idx for idx, cand in enumerate(raw_candidates)}
-        idx_by_item_id: dict[str, int] = {}
-        for idx, cand in enumerate(raw_candidates):
-            idx_by_item_id.setdefault(cand.item_id, idx)
+            idx_by_identity = {id(cand): idx for idx, cand in enumerate(raw_candidates)}
+            idx_by_item_id: dict[str, int] = {}
+            for idx, cand in enumerate(raw_candidates):
+                idx_by_item_id.setdefault(cand.item_id, idx)
 
-        canonical_indices: list[int] = []
-        can_slice = True
-        for cand in dedup_result.candidates:
-            mapped_idx = idx_by_identity.get(id(cand), idx_by_item_id.get(cand.item_id))
-            if mapped_idx is None:
-                can_slice = False
-                break
-            canonical_indices.append(mapped_idx)
+            preserved_indices: list[int] = []
+            can_slice = True
+            for cand in dedup_result.candidates:
+                mapped_idx = idx_by_identity.get(id(cand), idx_by_item_id.get(cand.item_id))
+                if mapped_idx is None:
+                    can_slice = False
+                    break
+                preserved_indices.append(mapped_idx)
 
-        canonical_vectors = candidate_vectors[canonical_indices] if can_slice else None
-        del candidate_vectors
+            canonical_vectors = candidate_vectors[preserved_indices] if can_slice else None
+            del candidate_vectors
 
-        scored = self._ranker.rank(
+        scored_raw = self._ranker.rank(
             clean_query,
             dedup_result.candidates,
             candidate_vectors=canonical_vectors,
@@ -131,6 +148,16 @@ class SemanticSearchProcessor:
         )
         del canonical_vectors
 
+        group_by_item_id: dict[str, str] = {}
+        for group in dedup_result.groups:
+            gid = group.group_id or f"product:{group.canonical.item_id}"
+            for offer in group.offers or (group.canonical,):
+                group_by_item_id[offer.item_id] = gid
+
+        scored = tuple(
+            entry.model_copy(update={"product_group_id": group_by_item_id.get(entry.candidate.item_id)})
+            for entry in scored_raw
+        )
         ordered_candidates = tuple(entry.candidate for entry in scored)
 
         if self._logger is not None:
@@ -148,9 +175,11 @@ class SemanticSearchProcessor:
         return SemanticProcessingResult(
             candidates=ordered_candidates,
             scored_candidates=scored,
+            product_groups=dedup_result.groups,
             deduplication=dedup_result,
             input_count=len(raw_candidates),
             output_count=len(ordered_candidates),
+            unique_products_count=len(dedup_result.groups),
             removed_duplicates_count=dedup_result.removed_count,
             embedding_model=model_name,
         )

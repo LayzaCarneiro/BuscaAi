@@ -1,0 +1,934 @@
+{
+  "version": "1.0",
+  "categories": [
+    {
+      "canonical_id": "notebook",
+      "primary_term_en": "laptop",
+      "aliases": [
+        "notebook",
+        "notebooks",
+        "laptop",
+        "laptops",
+        "ultrabook",
+        "ultrabooks",
+        "macbook",
+        "chromebook"
+      ],
+      "subtype_terms_en": {
+        "ultrabook": "ultrabook",
+        "ultrabooks": "ultrabook",
+        "macbook": "MacBook",
+        "chromebook": "Chromebook"
+      },
+      "standalone_models": ["macbook", "chromebook"],
+      "detection_keywords": [
+        "laptop",
+        "laptops",
+        "notebook",
+        "notebooks",
+        "ultrabook",
+        "macbook",
+        "chromebook"
+      ],
+      "priority_aspect_keys": [
+        "processor",
+        "cpu",
+        "processor type",
+        "ram size",
+        "ram",
+        "memory",
+        "system memory",
+        "ssd capacity",
+        "storage capacity",
+        "hard drive capacity",
+        "storage",
+        "screen size",
+        "display size",
+        "maximum resolution",
+        "resolution",
+        "gpu",
+        "graphics processing type",
+        "operating system"
+      ],
+      "applicable_attributes": [
+        "ram_gb",
+        "storage_gb",
+        "screen_size_inches",
+        "resolution",
+        "connectivity_features",
+        "condition_bucket",
+        "brand",
+        "model_tokens"
+      ]
+    },
+    {
+      "canonical_id": "smartphone",
+      "primary_term_en": "smartphone",
+      "aliases": [
+        "smartphone",
+        "smartphones",
+        "celular",
+        "celulares",
+        "telefone",
+        "telefone celular",
+        "iphone",
+        "cell phone",
+        "mobile phone"
+      ],
+      "subtype_terms_en": {},
+      "standalone_models": ["iphone"],
+      "detection_keywords": [
+        "smartphone",
+        "smartphones",
+        "cell phone",
+        "celular",
+        "iphone",
+        "galaxy s",
+        "pixel"
+      ],
+      "priority_aspect_keys": [
+        "storage capacity",
+        "capacity",
+        "internal storage",
+        "storage",
+        "ram",
+        "ram size",
+        "memory",
+        "screen size",
+        "network",
+        "connectivity",
+        "lock status"
+      ],
+      "applicable_attributes": [
+        "ram_gb",
+        "storage_gb",
+        "screen_size_inches",
+        "resolution",
+        "panel_type",
+        "refresh_rate_hz",
+        "connectivity_features",
+        "condition_bucket",
+        "brand",
+        "model_tokens"
+      ]
+    },
+    {
+      "canonical_id": "monitor",
+      "primary_term_en": "monitor",
+      "aliases": [
+        "monitor",
+        "monitores",
+        "display",
+        "tela de computador",
+        "computer monitor"
+      ],
+      "subtype_terms_en": {},
+      "standalone_models": [],
+      "detection_keywords": [
+        "monitor",
+        "monitors",
+        "computer monitor"
+      ],
+      "priority_aspect_keys": [
+        "screen size",
+        "display size",
+        "maximum resolution",
+        "resolution",
+        "refresh rate",
+        "display type",
+        "panel type",
+        "aspect ratio",
+        "response time",
+        "video inputs",
+        "features"
+      ],
+      "applicable_attributes": [
+        "screen_size_inches",
+        "resolution",
+        "refresh_rate_hz",
+        "panel_type",
+        "connectivity_features",
+        "condition_bucket",
+        "brand",
+        "model_tokens"
+      ]
+    },
+    {
+      "canonical_id": "fone de ouvido",
+      "primary_term_en": "headphones",
+      "aliases": [
+        "fone de ouvido",
+        "fones de ouvido",
+        "fone",
+        "fones",
+        "headphone",
+        "headphones",
+        "headset",
+        "headsets",
+        "earphone",
+        "earphones",
+        "earbud",
+        "earbuds",
+        "fone bluetooth",
+        "fones bluetooth",
+        "airpods"
+      ],
+      "subtype_terms_en": {
+        "headset": "headset",
+        "headsets": "headset",
+        "earbud": "earbuds",
+        "earbuds": "earbuds",
+        "intra-auricular": "earbuds",
+        "intra auricular": "earbuds",
+        "in-ear": "earbuds",
+        "tws": "earbuds",
+        "over-ear": "over-ear headphones",
+        "circumaural": "over-ear headphones"
+      },
+      "standalone_models": ["airpods"],
+      "detection_keywords": [
+        "headphones",
+        "headphone",
+        "headset",
+        "earbuds",
+        "earbud",
+        "earphones",
+        "airpods",
+        "fone de ouvido"
+      ],
+      "priority_aspect_keys": [
+        "form factor",
+        "type",
+        "fit design",
+        "connectivity",
+        "wireless technology",
+        "features",
+        "noise cancellation",
+        "microphone type"
+      ],
+      "applicable_attributes": [
+        "connectivity_features",
+        "form_factor",
+        "condition_bucket",
+        "brand",
+        "model_tokens"
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "profile_id": "best_value",
+      "display_name_pt": "Melhor custo-benefício",
+      "profile_kind": "objective",
+      "aliases": ["best_value", "best value", "melhor custo-beneficio", "melhor custo beneficio", "custo-beneficio", "custo beneficio"],
+      "description_pt": "Equilíbrio entre especificações essenciais da categoria e condição íntegra sem exigir topo de linha.",
+      "criteria_by_category": {
+        "notebook": [
+          {
+            "criterion_id": "bv_nb_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Notebook funcional (não destinado apenas a peças)."
+          },
+          {
+            "criterion_id": "bv_nb_ram_8gb",
+            "attribute": "ram_gb",
+            "operator": "gte",
+            "expected_value": 8,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 8 GB de memória RAM."
+          },
+          {
+            "criterion_id": "bv_nb_storage_256gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 256,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 256 GB de armazenamento."
+          }
+        ],
+        "smartphone": [
+          {
+            "criterion_id": "bv_sp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Smartphone funcional (não apenas para peças)."
+          },
+          {
+            "criterion_id": "bv_sp_storage_128gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 128,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 128 GB de armazenamento."
+          }
+        ],
+        "monitor": [
+          {
+            "criterion_id": "bv_mn_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Monitor funcional."
+          },
+          {
+            "criterion_id": "bv_mn_resolution_fhd",
+            "attribute": "resolution",
+            "operator": "in",
+            "expected_value": ["fhd", "qhd", "uhd_4k", "5k", "8k"],
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Resolução Full HD ou superior."
+          }
+        ],
+        "fone de ouvido": [
+          {
+            "criterion_id": "bv_hp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Fone funcional."
+          },
+          {
+            "criterion_id": "bv_hp_bluetooth",
+            "attribute": "connectivity_features",
+            "operator": "contains",
+            "expected_value": "bluetooth",
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Conectividade Bluetooth desejável."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "best_performance",
+      "display_name_pt": "Melhor desempenho",
+      "profile_kind": "objective",
+      "aliases": ["best_performance", "best performance", "melhor desempenho", "alto desempenho", "desempenho", "jogos", "gaming"],
+      "description_pt": "Prioriza especificações técnicas superiores de processamento, memória e tela.",
+      "criteria_by_category": {
+        "notebook": [
+          {
+            "criterion_id": "bp_nb_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Notebook funcional."
+          },
+          {
+            "criterion_id": "bp_nb_ram_16gb",
+            "attribute": "ram_gb",
+            "operator": "gte",
+            "expected_value": 16,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 16 GB de RAM para alto desempenho."
+          },
+          {
+            "criterion_id": "bp_nb_storage_512gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 512,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 512 GB de armazenamento."
+          }
+        ],
+        "smartphone": [
+          {
+            "criterion_id": "bp_sp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Smartphone funcional."
+          },
+          {
+            "criterion_id": "bp_sp_storage_256gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 256,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 256 GB de armazenamento."
+          },
+          {
+            "criterion_id": "bp_sp_5g",
+            "attribute": "connectivity_features",
+            "operator": "contains",
+            "expected_value": "5g",
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Suporte a rede 5G."
+          }
+        ],
+        "monitor": [
+          {
+            "criterion_id": "bp_mn_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Monitor funcional."
+          },
+          {
+            "criterion_id": "bp_mn_hz_120",
+            "attribute": "refresh_rate_hz",
+            "operator": "gte",
+            "expected_value": 120,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Taxa de atualização >= 120 Hz."
+          },
+          {
+            "criterion_id": "bp_mn_resolution_qhd_plus",
+            "attribute": "resolution",
+            "operator": "in",
+            "expected_value": ["qhd", "uhd_4k", "5k", "8k"],
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Resolução QHD ou superior."
+          }
+        ],
+        "fone de ouvido": [
+          {
+            "criterion_id": "bp_hp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Fone funcional."
+          },
+          {
+            "criterion_id": "bp_hp_anc",
+            "attribute": "connectivity_features",
+            "operator": "contains",
+            "expected_value": "anc",
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Cancelamento ativo de ruído (ANC)."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "lowest_price",
+      "display_name_pt": "Menor preço",
+      "profile_kind": "objective",
+      "aliases": ["lowest_price", "lowest price", "menor preco", "menor preço", "mais barato", "economico"],
+      "description_pt": "Mantém apenas integridade funcional mínima sem exigir especificações premium extras.",
+      "criteria_by_category": {
+        "notebook": [
+          {
+            "criterion_id": "lp_nb_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Notebook funcional (não para peças)."
+          }
+        ],
+        "smartphone": [
+          {
+            "criterion_id": "lp_sp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Smartphone funcional (não para peças)."
+          }
+        ],
+        "monitor": [
+          {
+            "criterion_id": "lp_mn_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Monitor funcional (não para peças)."
+          }
+        ],
+        "fone de ouvido": [
+          {
+            "criterion_id": "lp_hp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Fone funcional (não para peças)."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "professional_use",
+      "display_name_pt": "Uso profissional",
+      "profile_kind": "usage",
+      "aliases": ["professional_use", "professional use", "uso profissional", "trabalho", "programacao", "programação", "edicao de video", "edição de vídeo"],
+      "description_pt": "Critérios voltados a produtividade, trabalho técnico e reuniões.",
+      "criteria_by_category": {
+        "notebook": [
+          {
+            "criterion_id": "pro_nb_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Notebook funcional."
+          },
+          {
+            "criterion_id": "pro_nb_ram_16gb",
+            "attribute": "ram_gb",
+            "operator": "gte",
+            "expected_value": 16,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 16 GB de RAM para carga profissional."
+          },
+          {
+            "criterion_id": "pro_nb_storage_512gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 512,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 512 GB de SSD/armazenamento."
+          }
+        ],
+        "smartphone": [
+          {
+            "criterion_id": "pro_sp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Smartphone funcional."
+          },
+          {
+            "criterion_id": "pro_sp_storage_256gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 256,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 256 GB de armazenamento."
+          }
+        ],
+        "monitor": [
+          {
+            "criterion_id": "pro_mn_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Monitor funcional."
+          },
+          {
+            "criterion_id": "pro_mn_size_27",
+            "attribute": "screen_size_inches",
+            "operator": "gte",
+            "expected_value": 27,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Tela de 27 polegadas ou maior."
+          },
+          {
+            "criterion_id": "pro_mn_ips_or_oled",
+            "attribute": "panel_type",
+            "operator": "in",
+            "expected_value": ["ips", "oled", "qd-oled", "mini-led"],
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Painel IPS/OLED para fidelidade visual."
+          }
+        ],
+        "fone de ouvido": [
+          {
+            "criterion_id": "pro_hp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Fone funcional."
+          },
+          {
+            "criterion_id": "pro_hp_anc",
+            "attribute": "connectivity_features",
+            "operator": "contains",
+            "expected_value": "anc",
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Cancelamento de ruído (ANC) para foco e chamadas."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "study",
+      "display_name_pt": "Estudos",
+      "profile_kind": "usage",
+      "aliases": ["study", "estudo", "estudos", "faculdade", "estudante"],
+      "description_pt": "Critérios equilibrados para leitura, aulas e tarefas acadêmicas.",
+      "criteria_by_category": {
+        "notebook": [
+          {
+            "criterion_id": "st_nb_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Notebook funcional."
+          },
+          {
+            "criterion_id": "st_nb_ram_8gb",
+            "attribute": "ram_gb",
+            "operator": "gte",
+            "expected_value": 8,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 8 GB de RAM."
+          },
+          {
+            "criterion_id": "st_nb_storage_256gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 256,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 2,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 256 GB de armazenamento."
+          }
+        ],
+        "smartphone": [
+          {
+            "criterion_id": "st_sp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Smartphone funcional."
+          },
+          {
+            "criterion_id": "st_sp_storage_128gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 128,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 128 GB de armazenamento."
+          }
+        ],
+        "monitor": [
+          {
+            "criterion_id": "st_mn_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Monitor funcional."
+          },
+          {
+            "criterion_id": "st_mn_resolution_fhd",
+            "attribute": "resolution",
+            "operator": "in",
+            "expected_value": ["fhd", "qhd", "uhd_4k", "5k", "8k"],
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Resolução Full HD ou superior para leitura."
+          }
+        ],
+        "fone de ouvido": [
+          {
+            "criterion_id": "st_hp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Fone funcional."
+          },
+          {
+            "criterion_id": "st_hp_wireless",
+            "attribute": "connectivity_features",
+            "operator": "contains",
+            "expected_value": "bluetooth",
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Bluetooth para mobilidade nos estudos."
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "everyday_use",
+      "display_name_pt": "Uso cotidiano",
+      "profile_kind": "usage",
+      "aliases": ["everyday_use", "everyday use", "uso cotidiano", "dia a dia", "uso diario", "uso diário", "entretenimento"],
+      "description_pt": "Critérios práticos para navegação, mídia e uso geral.",
+      "criteria_by_category": {
+        "notebook": [
+          {
+            "criterion_id": "ev_nb_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Notebook funcional."
+          },
+          {
+            "criterion_id": "ev_nb_ram_8gb",
+            "attribute": "ram_gb",
+            "operator": "gte",
+            "expected_value": 8,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 8 GB de RAM."
+          }
+        ],
+        "smartphone": [
+          {
+            "criterion_id": "ev_sp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Smartphone funcional."
+          },
+          {
+            "criterion_id": "ev_sp_storage_128gb",
+            "attribute": "storage_gb",
+            "operator": "gte",
+            "expected_value": 128,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Pelo menos 128 GB de armazenamento."
+          }
+        ],
+        "monitor": [
+          {
+            "criterion_id": "ev_mn_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Monitor funcional."
+          },
+          {
+            "criterion_id": "ev_mn_size_24",
+            "attribute": "screen_size_inches",
+            "operator": "gte",
+            "expected_value": 24,
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Tela de 24 polegadas ou maior."
+          }
+        ],
+        "fone de ouvido": [
+          {
+            "criterion_id": "ev_hp_functional_condition",
+            "attribute": "condition_bucket",
+            "operator": "neq",
+            "expected_value": "parts",
+            "priority": "hard",
+            "relaxable": false,
+            "relaxation_order": 0,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["condition", "title"],
+            "description_pt": "Fone funcional."
+          },
+          {
+            "criterion_id": "ev_hp_bluetooth",
+            "attribute": "connectivity_features",
+            "operator": "contains",
+            "expected_value": "bluetooth",
+            "priority": "soft",
+            "relaxable": true,
+            "relaxation_order": 1,
+            "missing_behavior": "unknown",
+            "required_evidence_fields": ["aspects", "title", "short_description"],
+            "description_pt": "Conectividade Bluetooth."
+          }
+        ]
+      }
+    }
+  ]
+}

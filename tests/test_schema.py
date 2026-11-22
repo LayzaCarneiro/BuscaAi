@@ -18,8 +18,6 @@ def _collect_keys(obj: object) -> set[str]:
             keys.update(_collect_keys(item))
     return keys
 
-from src.userintent.schema import UserIntent
-
 def test_schema_accepts_expected_shape():
     intent = UserIntent(
         category="  notebook  ",
