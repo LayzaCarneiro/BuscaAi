@@ -37,3 +37,9 @@ htmlcov/
 .vscode/
 .idea/
 *.log
+
+
+# Ferramentas locais de IA (Antigravity, jCodeMunch, Graphify)
+.agents/
+.agent/
+graphify-out/

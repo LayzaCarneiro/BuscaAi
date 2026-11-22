@@ -29,14 +29,18 @@ from .embeddings import (
 from .pipeline import SemanticProcessingResult, SemanticSearchProcessor, merge_search_responses
 from .ranker import InMemorySemanticRanker, SemanticScoredCandidate
 from .representation import (
+    DEFAULT_MAX_EMBEDDING_CHARS,
     ProductStructuredAttributes,
+    VARIANT_TIER_TOKENS,
     build_candidate_embedding_text,
     build_query_embedding_text,
+    build_semantic_query_text,
     extract_product_attributes,
 )
 
 __all__ = [
     "ALTERNATIVE_MODEL_NAME",
+    "DEFAULT_MAX_EMBEDDING_CHARS",
     "DeduplicationConfig",
     "DeduplicationResult",
     "DeterministicStubEmbeddingProvider",
@@ -59,8 +63,10 @@ __all__ = [
     "SemanticScoredCandidate",
     "SemanticSearchProcessor",
     "SentenceTransformerEmbeddingProvider",
+    "VARIANT_TIER_TOKENS",
     "build_candidate_embedding_text",
     "build_query_embedding_text",
+    "build_semantic_query_text",
     "clamp_unit_scores",
     "cosine_similarity_matrix",
     "extract_product_attributes",

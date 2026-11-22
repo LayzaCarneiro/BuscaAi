@@ -189,7 +189,15 @@ def test_semantic_pipeline_has_zero_disk_writes_zero_cache_and_transient_lifecyc
     assert list(tmp_path.rglob("*")) == []
 
 
-def test_semantic_errors_never_leak_listing_strings_in_logs() -> None:
+def test_semantic_errors_never_leak_listing_strings_in_logs_or_exceptions() -> None:
+    import json
+    from buscai.semantic import (
+        EmbeddingInferenceError,
+        EmbeddingModelLoadError,
+        FastEmbedEmbeddingProvider,
+        SentenceTransformerEmbeddingProvider,
+    )
+
     log_stream = io.StringIO()
     logger = configure_logging("DEBUG", stream=log_stream, logger_name="buscai.test.semantic.err")
     provider = _TrackingStubProvider(fail_inference=True)
@@ -201,11 +209,88 @@ def test_semantic_errors_never_leak_listing_strings_in_logs() -> None:
         title="SENTINEL_TITLE_SECRET Laptop",
         price=Decimal("500.00"),
         currency="USD",
+        item_web_url="https://ebay.example/itm/SENTINEL_URL_SECRET",
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises(EmbeddingInferenceError) as exc_info:
         processor.process("laptop", [cand], request_id="req-err-1")
 
-    assert "SENTINEL_TITLE_SECRET" not in log_stream.getvalue()
+    # Mensagem normalizada fixa + tipo de erro, sem vazar título ou URL na string nem nos logs JSON.
+    assert "SENTINEL_TITLE_SECRET" not in str(exc_info.value)
+    assert "SENTINEL_URL_SECRET" not in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+    serialized_err = json.dumps({"error": type(exc_info.value).__name__, "message": str(exc_info.value)})
+    assert "SENTINEL_TITLE_SECRET" not in serialized_err
+
+    logs_raw = log_stream.getvalue().strip()
+    assert logs_raw != ""
+    parsed_logs = [json.loads(line) for line in logs_raw.splitlines()]
+    assert any(entry.get("event") == "embedding_inference_failed" and entry.get("error_type") == "EmbeddingInferenceError" for entry in parsed_logs)
+    assert "SENTINEL_TITLE_SECRET" not in logs_raw
+
+    # Provedores reais também devem emitir mensagens fixas sem ecoar título de entrada em erro de modelo/tokenizer.
+    class _LeakySTModel:
+        def encode(self, *_args, **_kwargs):
+            raise ValueError("Tokenizer failed on 'SENTINEL_TITLE_SECRET'")
+
+    st_prov = SentenceTransformerEmbeddingProvider(model_loader=lambda _n, _d: _LeakySTModel())
+    with pytest.raises(EmbeddingInferenceError) as st_exc:
+        st_prov.embed_documents(["SENTINEL_TITLE_SECRET"])
+    assert "SENTINEL_TITLE_SECRET" not in str(st_exc.value)
+    assert isinstance(st_exc.value.__cause__, ValueError)
+
+    fe_prov = FastEmbedEmbeddingProvider(
+        model_loader=lambda _n: (_ for _ in ()).throw(RuntimeError("Bad path SENTINEL_URL_SECRET"))
+    )
+    with pytest.raises(EmbeddingModelLoadError) as fe_exc:
+        fe_prov.ensure_loaded()
+    assert "SENTINEL_URL_SECRET" not in str(fe_exc.value)
+
+
+def test_semantic_pipeline_triggers_zero_write_audit_events_and_no_temp_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import tempfile
+
+    monkeypatch.chdir(tmp_path)
+    temp_dir = Path(tempfile.gettempdir())
+    before_tmp = {p.name for p in temp_dir.iterdir()}
+
+    write_events: list[tuple[str, tuple[object, ...]]] = []
+
+    def _audit(event: str, args: tuple[object, ...]) -> None:
+        if event == "open" and len(args) >= 2:
+            mode = str(args[1]) if args[1] is not None else ""
+            if any(flag in mode for flag in ("w", "a", "x", "+")):
+                write_events.append((event, args))
+        elif event in {"os.mkdir", "os.makedirs", "os.rename", "os.replace"}:
+            write_events.append((event, args))
+
+    sys.addaudithook(_audit)
+
+    cands = [
+        Candidate(
+            item_id="v1|audit-1|0",
+            source="ebay",
+            title="Lenovo ThinkPad X1 Carbon 16GB RAM",
+            price=Decimal("900.00"),
+            currency="USD",
+            brand="Lenovo",
+            model="ThinkPad X1 Carbon",
+        )
+    ]
+    processor = SemanticSearchProcessor(EmbeddingService(DeterministicStubEmbeddingProvider()))
+    before_count = len(write_events)
+    res = processor.process("notebook Lenovo", cands)
+    after_count = len(write_events)
+
+    assert after_count == before_count, f"Eventos de escrita inesperados: {write_events[before_count:]}"
+    assert list(tmp_path.rglob("*")) == []
+    after_tmp = {p.name for p in temp_dir.iterdir()}
+    assert after_tmp == before_tmp
+    assert not any(isinstance(v, np.ndarray) for v in vars(res).values())
 
 
 def test_semantic_modules_do_not_import_persistence_caches_or_network_clients() -> None:
@@ -225,6 +310,7 @@ def test_semantic_modules_do_not_import_persistence_caches_or_network_clients() 
         "langgraph",
         "langchain",
     }
+    forbidden_write_calls = {"open", "write_text", "write_bytes", "save", "savez", "savez_compressed", "memmap"}
 
     offenders: list[str] = []
     for py_file in sorted(SEMANTIC_DIR.glob("*.py")):
@@ -239,5 +325,11 @@ def test_semantic_modules_do_not_import_persistence_caches_or_network_clients() 
                 root = node.module.split(".")[0]
                 if root in forbidden_roots:
                     offenders.append(f"{py_file.name}: from {node.module}")
+            elif isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id in forbidden_write_calls:
+                    offenders.append(f"{py_file.name}: call {func.id}()")
+                elif isinstance(func, ast.Attribute) and func.attr in forbidden_write_calls:
+                    offenders.append(f"{py_file.name}: call .{func.attr}()")
 
-    assert offenders == [], f"Imports proibidos em src/buscai/semantic/: {offenders}"
+    assert offenders == [], f"Imports ou chamadas proibidas em src/buscai/semantic/: {offenders}"

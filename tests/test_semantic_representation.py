@@ -151,3 +151,58 @@ def test_extract_attributes_keeps_missing_fields_as_none() -> None:
     assert attrs.storage_gb is None
     assert attrs.resolution is None
     assert attrs.manufacturer_ids == ()
+
+
+def test_a13_embedding_text_prioritizes_technical_specs_over_alphabetical_noise() -> None:
+    many_aspects = {f"AlphaNoise{idx:02d}": (f"Extra marketing filler value {idx}",) for idx in range(45)}
+    many_aspects.update(
+        {
+            "RAM Size": ("32 GB",),
+            "SSD Capacity": ("1 TB",),
+            "Processor": ("Intel Core i7-1365U",),
+            "Screen Size": ("14 in",),
+            "MPN": ("21HM0001US",),
+        }
+    )
+    cand = Candidate(
+        item_id="nb-a13",
+        source="ebay",
+        title="Lenovo ThinkPad X1 Carbon Gen 11 Laptop",
+        price=Decimal("1299.00"),
+        currency="USD",
+        brand="Lenovo",
+        model="ThinkPad X1 Carbon Gen 11",
+        aspects=many_aspects,
+    )
+
+    text = build_candidate_embedding_text(cand, category_hint="notebook", max_chars=500)
+    assert len(text) <= 500
+    assert "Processor: Intel Core i7-1365U" in text
+    assert "RAM Size: 32 GB" in text
+    assert "SSD Capacity: 1 TB" in text
+    assert "Screen Size: 14 in" in text
+    assert "MPN: 21HM0001US" in text
+    assert "AlphaNoise44" not in text
+
+
+def test_a14_build_semantic_query_text_strips_transactional_budget_noise() -> None:
+    from buscai.semantic.representation import build_semantic_query_text
+    from userintent.schema import PriceConstraint, UserIntent
+
+    intent = UserIntent(
+        category="notebook",
+        brands=["Lenovo"],
+        models=["ThinkPad"],
+        required_features=["16GB RAM"],
+        use_cases=["programação"],
+        price=PriceConstraint(max_price=5000, is_hard_constraint=True, currency="BRL"),
+        query="notebook Lenovo ThinkPad até R$ 5.000 para programação",
+    )
+    from_intent = build_semantic_query_text(intent.query, intent=intent)
+    assert "5000" not in from_intent and "5.000" not in from_intent
+    assert "Lenovo" in from_intent
+    assert "16GB RAM" in from_intent
+
+    from_raw = build_semantic_query_text("monitor 4K IPS até R$ 2.500")
+    assert "2.500" not in from_raw
+    assert "monitor 4K IPS" in from_raw

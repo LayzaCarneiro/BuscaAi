@@ -15,7 +15,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from buscai.config import Settings
-from buscai.observability import log_operational_event, sanitize_text
+from buscai.observability import log_operational_event
 from buscai.search.models import Candidate
 from buscai.semantic.representation import build_candidate_embedding_text, build_query_embedding_text
 
@@ -48,6 +48,7 @@ class EmbeddingModelInfo(BaseModel):
     requires_prefixes: bool = False
     query_prefix: str = ""
     document_prefix: str = ""
+    symmetric_prefix: str = ""
     license_name: str
     supports_pt_en: bool = True
 
@@ -62,6 +63,7 @@ SUPPORTED_MODEL_SPECS: dict[str, EmbeddingModelInfo] = {
         requires_prefixes=True,
         query_prefix="query: ",
         document_prefix="passage: ",
+        symmetric_prefix="query: ",
         license_name="MIT",
         supports_pt_en=True,
     ),
@@ -74,6 +76,7 @@ SUPPORTED_MODEL_SPECS: dict[str, EmbeddingModelInfo] = {
         requires_prefixes=False,
         query_prefix="",
         document_prefix="",
+        symmetric_prefix="",
         license_name="Apache-2.0",
         supports_pt_en=True,
     ),
@@ -109,6 +112,7 @@ def resolve_model_spec(
         requires_prefixes=is_e5,
         query_prefix="query: " if is_e5 else "",
         document_prefix="passage: " if is_e5 else "",
+        symmetric_prefix="query: " if is_e5 else "",
         license_name="external",
         supports_pt_en=True,
     )
@@ -230,9 +234,8 @@ class SentenceTransformerEmbeddingProvider:
                     "Dependência opcional 'sentence-transformers' não instalada neste ambiente."
                 ) from exc
             except Exception as exc:
-                safe_msg = sanitize_text(str(exc)) or type(exc).__name__
                 raise EmbeddingModelLoadError(
-                    f"Falha ao carregar modelo SentenceTransformer '{self._info.model_name}': {safe_msg}"
+                    f"Falha ao carregar modelo de embeddings ({type(exc).__name__})."
                 ) from exc
 
             get_dim = getattr(loaded, "get_sentence_embedding_dimension", None)
@@ -280,8 +283,9 @@ class SentenceTransformerEmbeddingProvider:
         except EmbeddingInferenceError:
             raise
         except Exception as exc:
-            safe_msg = sanitize_text(str(exc)) or type(exc).__name__
-            raise EmbeddingInferenceError(f"Falha de inferência no SentenceTransformer: {safe_msg}") from exc
+            raise EmbeddingInferenceError(
+                f"Falha de inferência no provedor SentenceTransformer ({type(exc).__name__})."
+            ) from exc
 
         if vectors.shape[0] != len(cleaned) or vectors.shape[1] != self._info.dimension:
             raise EmbeddingInferenceError(
@@ -327,9 +331,8 @@ class FastEmbedEmbeddingProvider:
                     "Dependência opcional 'fastembed' não instalada neste ambiente."
                 ) from exc
             except Exception as exc:
-                safe_msg = sanitize_text(str(exc)) or type(exc).__name__
                 raise EmbeddingModelLoadError(
-                    f"Falha ao carregar modelo FastEmbed '{self._info.model_name}': {safe_msg}"
+                    f"Falha ao carregar modelo FastEmbed ({type(exc).__name__})."
                 ) from exc
             self._model = loaded
             return self._model
@@ -370,8 +373,9 @@ class FastEmbedEmbeddingProvider:
         except EmbeddingInferenceError:
             raise
         except Exception as exc:
-            safe_msg = sanitize_text(str(exc)) or type(exc).__name__
-            raise EmbeddingInferenceError(f"Falha de inferência no FastEmbed: {safe_msg}") from exc
+            raise EmbeddingInferenceError(
+                f"Falha de inferência no provedor FastEmbed ({type(exc).__name__})."
+            ) from exc
 
         if vectors.shape[0] != len(cleaned) or vectors.shape[1] != self._info.dimension:
             raise EmbeddingInferenceError(
@@ -451,8 +455,9 @@ class DeterministicStubEmbeddingProvider:
             try:
                 self._model_loader()
             except Exception as exc:
-                safe_msg = sanitize_text(str(exc)) or type(exc).__name__
-                raise EmbeddingModelLoadError(f"Falha ao inicializar stub de embeddings: {safe_msg}") from exc
+                raise EmbeddingModelLoadError(
+                    f"Falha ao inicializar stub de embeddings ({type(exc).__name__})."
+                ) from exc
         self._loaded = True
 
     def embed_queries(self, texts: Sequence[str], *, batch_size: int = 32) -> np.ndarray:
@@ -554,7 +559,12 @@ class EmbeddingService:
         """Gera matriz `float32` L2-normalizada `(N, D)` para consultas."""
         cleaned = _validate_text_batch(query_texts, role="queries")
         started = time.monotonic()
-        vectors = self._provider.embed_queries(cleaned, batch_size=self._batch_size)
+        vectors = self._invoke_provider(
+            lambda: self._provider.embed_queries(cleaned, batch_size=self._batch_size),
+            started=started,
+            item_count=len(cleaned),
+            request_id=request_id,
+        )
         self._log_event("embedding_queries_generated", item_count=len(cleaned), started=started, request_id=request_id)
         return vectors
 
@@ -562,7 +572,12 @@ class EmbeddingService:
         """Gera matriz `float32` L2-normalizada `(N, D)` em lotes para textos de produtos."""
         cleaned = _validate_text_batch(texts, role="documents")
         started = time.monotonic()
-        vectors = self._provider.embed_documents(cleaned, batch_size=self._batch_size)
+        vectors = self._invoke_provider(
+            lambda: self._provider.embed_documents(cleaned, batch_size=self._batch_size),
+            started=started,
+            item_count=len(cleaned),
+            request_id=request_id,
+        )
         self._log_event("embedding_documents_generated", item_count=len(cleaned), started=started, request_id=request_id)
         return vectors
 
@@ -570,17 +585,39 @@ class EmbeddingService:
         self,
         candidates: Sequence[Candidate],
         *,
+        mode: Literal["retrieval_document", "symmetric_similarity"] = "retrieval_document",
+        category_hint: str | None = None,
         request_id: str | None = None,
     ) -> np.ndarray:
-        """Gera embeddings transitórios para `Candidate`s usando apenas atributos semânticos."""
+        """Gera embeddings transitórios para `Candidate`s usando apenas atributos semânticos.
+
+        - `retrieval_document` (padrão): usa prefixo de passagem (`passage: ` no E5) para busca assimétrica.
+        - `symmetric_similarity`: usa prefixo de consulta (`query: ` no E5) em ambos os lados para
+          comparação simétrica documento-documento (deduplicação), conforme model card oficial do E5.
+        """
         if isinstance(candidates, (str, bytes)) or not isinstance(candidates, Sequence):
             raise ValueError("candidates deve ser uma sequência válida de Candidate.")
         if len(candidates) == 0:
             raise ValueError("Lista de candidates para embedding não pode ser vazia.")
+        if mode not in ("retrieval_document", "symmetric_similarity"):
+            raise ValueError(f"mode inválido para embed_candidates: {mode!r}.")
 
-        texts = [build_candidate_embedding_text(cand) for cand in candidates]
+        texts = [build_candidate_embedding_text(cand, category_hint=category_hint) for cand in candidates]
         started = time.monotonic()
-        vectors = self._provider.embed_documents(texts, batch_size=self._batch_size)
+        if mode == "symmetric_similarity":
+            vectors = self._invoke_provider(
+                lambda: self._provider.embed_queries(texts, batch_size=self._batch_size),
+                started=started,
+                item_count=len(candidates),
+                request_id=request_id,
+            )
+        else:
+            vectors = self._invoke_provider(
+                lambda: self._provider.embed_documents(texts, batch_size=self._batch_size),
+                started=started,
+                item_count=len(candidates),
+                request_id=request_id,
+            )
         self._log_event(
             "embedding_candidates_generated",
             item_count=len(candidates),
@@ -589,19 +626,77 @@ class EmbeddingService:
         )
         return vectors
 
-    def _log_event(self, event: str, *, item_count: int, started: float, request_id: str | None) -> None:
+    def _invoke_provider(
+        self,
+        fn: Callable[[], np.ndarray],
+        *,
+        started: float,
+        item_count: int,
+        request_id: str | None,
+    ) -> np.ndarray:
+        try:
+            return fn()
+        except EmbeddingError as exc:
+            self._log_event(
+                logging.ERROR,
+                "embedding_operation_failed",
+                item_count=item_count,
+                started=started,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+            )
+            raise
+        except ValueError as exc:
+            self._log_event(
+                logging.ERROR,
+                "embedding_validation_failed",
+                item_count=item_count,
+                started=started,
+                request_id=request_id,
+                error_type=type(exc).__name__,
+            )
+            raise
+        except Exception as exc:
+            self._log_event(
+                logging.ERROR,
+                "embedding_inference_failed",
+                item_count=item_count,
+                started=started,
+                request_id=request_id,
+                error_type="EmbeddingInferenceError",
+            )
+            raise EmbeddingInferenceError(
+                f"Falha de inferência no provedor de embeddings ({type(exc).__name__})."
+            ) from exc
+
+    def _log_event(
+        self,
+        level_or_event: int | str,
+        event: str | None = None,
+        *,
+        item_count: int,
+        started: float,
+        request_id: str | None,
+        error_type: str | None = None,
+    ) -> None:
+        if isinstance(level_or_event, str):
+            level = logging.INFO
+            event_name = level_or_event
+        else:
+            level = level_or_event
+            event_name = event or "embedding_event"
         if self._logger is not None:
             info = self._provider.info()
-            log_operational_event(
-                self._logger,
-                logging.INFO,
-                event,
-                stage="semantic_embedding",
-                provider=info.backend,
-                item_count=item_count,
-                duration_ms=round((time.monotonic() - started) * 1000.0, 2),
-                request_id=request_id,
-            )
+            fields: dict[str, object] = {
+                "stage": "semantic_embedding",
+                "provider": info.backend,
+                "item_count": item_count,
+                "duration_ms": round((time.monotonic() - started) * 1000.0, 2),
+                "request_id": request_id,
+            }
+            if error_type is not None:
+                fields["error_type"] = error_type
+            log_operational_event(self._logger, level, event_name, **fields)
 
 
 __all__ = [

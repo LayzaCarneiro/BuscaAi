@@ -110,23 +110,25 @@ def test_query_builder_preserves_brands_models_dedup_and_features() -> None:
     assert "16GB RAM" in q_text
     assert "512GB NVMe SSD" in q_text
     assert "14 inch" in q_text
-    assert "backlit keyboard" in q_text
+    # Preferências relaxáveis NÃO entram na consulta principal (A3)
+    assert "backlit keyboard" not in q_text
     # Termos subjetivos e finalidades de uso NÃO entram na query EN-US
     assert "bom" not in q_text
     assert "programação" not in q_text
     assert "estudos" not in q_text
     assert "use_case:programação" in plan.ignored_preferences
+    assert "deferred_preference:teclado retroiluminado" in plan.ignored_preferences
     assert "subjective:bom" in plan.ignored_preferences
     assert "subjective:bateria longa" in plan.ignored_preferences
     assert plan.excluded_brands == ("Positivo",)
     assert plan.excluded_features == ("tela touch",)
 
-    # Consulta alternativa mantém requisitos obrigatórios e descarta preferência opcional
+    # Consulta alternativa pode refinar com preferências traduzidas mantendo requisitos obrigatórios
     assert len(plan.queries) == 2
     alt = plan.queries[1].query
     assert "16GB RAM" in alt.query_text
     assert "512GB NVMe SSD" in alt.query_text
-    assert "backlit keyboard" not in alt.query_text
+    assert "backlit keyboard" in alt.query_text
 
 
 def test_query_builder_handles_min_max_budget_brl_usd_and_missing_budget() -> None:
@@ -319,3 +321,56 @@ def test_query_builder_module_makes_no_http_or_llm_calls() -> None:
             imported.add(node.module.split(".")[0])
 
     assert imported.isdisjoint(forbidden_modules)
+
+
+@pytest.mark.parametrize(
+    ("category", "features", "forbidden_pt_tokens", "expected_en_tokens"),
+    [
+        ("smartphone", ["resistente à poeira", "resistente a poeira"], ["resistente", "poeira"], ["dustproof"]),
+        ("notebook", ["bateria de longa duração", "bateria de longa duracao"], ["bateria", "longa", "duracao"], []),
+        ("smartphone", ["tela dobrável", "tela dobravel"], ["tela", "dobravel"], ["foldable"]),
+        ("notebook", ["teclado numérico", "teclado numerico"], ["teclado", "numerico"], ["numpad"]),
+        ("monitor", ["tela curva"], ["tela", "curva"], ["curved"]),
+        ("notebook", ["compatibilidade com Linux", "fácil instalação de Linux"], ["compatibilidade", "instalacao", "facil", "com"], ["Linux"]),
+        ("notebook", ["carcaça de alumínio escovado", "carcaca de aluminio escovado"], ["carcaca", "aluminio", "escovado"], []),
+    ],
+)
+def test_a3_query_builder_never_leaks_portuguese_and_respects_max_length(
+    category: str,
+    features: list[str],
+    forbidden_pt_tokens: list[str],
+    expected_en_tokens: list[str],
+) -> None:
+    builder = _make_builder(max_queries=1)
+    plan = builder.build(
+        UserIntent(
+            category=category,
+            required_features=features,
+            preferred_features=["Wi-Fi 6", "carcaça reforçada sem tradução"],
+            query=f"{category} {' '.join(features)}",
+        )
+    )
+    assert plan.primary_query is not None
+    q_low = plan.primary_query.query_text.casefold()
+    for pt_tok in forbidden_pt_tokens:
+        assert pt_tok not in q_low
+    for en_tok in expected_en_tokens:
+        assert en_tok.casefold() in q_low
+    # Preferências não entram na consulta principal e desconhecidas vão para ignored_preferences
+    assert "wi-fi" not in q_low
+    assert "deferred_preference:Wi-Fi 6" in plan.ignored_preferences
+    assert "unmapped_feature:carcaça reforçada sem tradução" in plan.ignored_preferences
+
+    # Limite de tamanho de query respeitado em fronteira de palavra
+    long_builder = _make_builder(max_queries=1, max_query_length=40)
+    long_plan = long_builder.build(
+        UserIntent(
+            category="notebook",
+            brands=["Lenovo"],
+            models=["ThinkPad X1 Carbon Gen 11"],
+            required_features=["16 GB de RAM", "SSD NVMe de 512 GB", "14 polegadas", "teclado retroiluminado"],
+            query="notebook Lenovo ThinkPad X1",
+        )
+    )
+    assert long_plan.primary_query is not None
+    assert len(long_plan.primary_query.query_text) <= 40

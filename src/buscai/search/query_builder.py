@@ -11,6 +11,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from buscai.catalog_registry import load_default_registry
 from buscai.config import Settings
 from buscai.pricing import CurrencyConverter, ExchangeRateInfo, FixedEnvExchangeRateProvider
 from buscai.search.models import SearchQuery
@@ -18,6 +19,7 @@ from userintent.budget import merge_explicit_budget
 from userintent.schema import UserIntent
 
 _TWO_DECIMALS = Decimal("0.01")
+MAX_QUERY_TEXT_LENGTH = 100
 
 
 class IntentExtractorLike(Protocol):
@@ -110,89 +112,15 @@ class IntentQueryPlanResult(BaseModel):
         return self.plan.search_queries
 
 
-DEFAULT_MVP_CATEGORIES: tuple[CategorySpec, ...] = (
+DEFAULT_MVP_CATEGORIES: tuple[CategorySpec, ...] = tuple(
     CategorySpec(
-        canonical_id="notebook",
-        primary_term_en="laptop",
-        aliases=(
-            "notebook",
-            "notebooks",
-            "laptop",
-            "laptops",
-            "ultrabook",
-            "ultrabooks",
-            "macbook",
-            "chromebook",
-        ),
-        subtype_terms_en={
-            "ultrabook": "ultrabook",
-            "ultrabooks": "ultrabook",
-            "macbook": "MacBook",
-            "chromebook": "Chromebook",
-        },
-        standalone_models=("macbook", "chromebook"),
-    ),
-    CategorySpec(
-        canonical_id="smartphone",
-        primary_term_en="smartphone",
-        aliases=(
-            "smartphone",
-            "smartphones",
-            "celular",
-            "celulares",
-            "telefone",
-            "telefone celular",
-            "iphone",
-            "cell phone",
-            "mobile phone",
-        ),
-        standalone_models=("iphone",),
-    ),
-    CategorySpec(
-        canonical_id="monitor",
-        primary_term_en="monitor",
-        aliases=(
-            "monitor",
-            "monitores",
-            "display",
-            "tela de computador",
-            "computer monitor",
-        ),
-    ),
-    CategorySpec(
-        canonical_id="fone de ouvido",
-        primary_term_en="headphones",
-        aliases=(
-            "fone de ouvido",
-            "fones de ouvido",
-            "fone",
-            "fones",
-            "headphone",
-            "headphones",
-            "headset",
-            "headsets",
-            "earphone",
-            "earphones",
-            "earbud",
-            "earbuds",
-            "fone bluetooth",
-            "fones bluetooth",
-            "airpods",
-        ),
-        subtype_terms_en={
-            "headset": "headset",
-            "headsets": "headset",
-            "earbud": "earbuds",
-            "earbuds": "earbuds",
-            "intra-auricular": "earbuds",
-            "intra auricular": "earbuds",
-            "in-ear": "earbuds",
-            "tws": "earbuds",
-            "over-ear": "over-ear headphones",
-            "circumaural": "over-ear headphones",
-        },
-        standalone_models=("airpods",),
-    ),
+        canonical_id=cat.canonical_id,
+        primary_term_en=cat.primary_term_en,
+        aliases=cat.aliases,
+        subtype_terms_en=cat.subtype_terms_en,
+        standalone_models=cat.standalone_models,
+    )
+    for cat in load_default_registry().categories
 )
 
 _MVP_CANONICAL_IDS = frozenset({"notebook", "smartphone", "monitor", "fone de ouvido"})
@@ -251,6 +179,7 @@ _SUBJECTIVE_FEATURES: frozenset[str] = frozenset(
         "boa camera",
         "camera boa",
         "bateria longa",
+        "bateria de longa duracao",
         "boa bateria",
         "bateria boa",
         "boa autonomia",
@@ -282,6 +211,15 @@ _FEATURE_PHRASE_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     ("a prova d agua", "waterproof"),
     ("a prova de agua", "waterproof"),
     ("carregamento rapido", "fast charging"),
+    ("resistente a poeira", "dustproof"),
+    ("resistente ao suor", "sweatproof"),
+    ("leitor de digitais", "fingerprint"),
+    ("tela dobravel", "foldable"),
+    ("teclado numerico", "numpad"),
+    ("tela curva", "curved"),
+    ("instalacao de linux", "Linux"),
+    ("compatibilidade com linux", "Linux"),
+    ("compativel com linux", "Linux"),
     ("sem fio", "wireless"),
     ("com fio", "wired"),
     ("microfone", "microphone"),
@@ -374,6 +312,24 @@ _HZ_RE = re.compile(
 _BATTERY_MAH_RE = re.compile(r"^(?:bateria\s+(?:de\s+)?)?(\d{3,5})\s*mah$")
 _WATTS_RE = re.compile(r"^(\d+)\s*w(?:atts?)?$")
 _COMPAT_PREFIX_RE = re.compile(r"^compativel\s+com\s+")
+_CONTROLLED_TECH_CODE_RE = re.compile(
+    r"^(?:"
+    r"(?:intel\s+)?core\s+(?:i[3579]|ultra\s+[579])(?:\s+\d{4,5}[a-z]{0,2})?"
+    r"|(?:amd\s+)?ryzen\s+[3579](?:\s+\d{4}[a-z]{0,2})?"
+    r"|apple\s+m[1-4](?:\s+(?:pro|max|ultra))?|m[1-4](?:\s+(?:pro|max|ultra))?"
+    r"|(?:nvidia\s+)?(?:geforce\s+)?(?:rtx|gtx)\s*\d{3,4}(?:\s*(?:ti|super))?"
+    r"|(?:amd\s+)?(?:radeon\s+)?rx\s*\d{3,4}(?:\s*xt)?"
+    r"|snapdragon(?:\s+[a-z0-9+.-]+){1,3}"
+    r"|ip\d{2}"
+    r"|wi-?fi\s*(?:5|6e?|7)"
+    r"|bluetooth\s+\d(?:\.\d)?"
+    r"|lpddr\d[x]?|ddr\d"
+    r"|pcie\s*\d(?:\.\d)?"
+    r"|hdmi\s*\d(?:\.\d)?|thunderbolt\s*\d|usb\s*[234](?:\.\d)?"
+    r"|esim|4g|lte|nfc|5g"
+    r")$",
+    re.IGNORECASE,
+)
 
 
 def _strip_accents(text: str) -> str:
@@ -494,12 +450,9 @@ def _translate_feature_en(raw_feature: str) -> tuple[str | None, str | None]:
     if composite_hits and not leftover_words:
         return _dedupe_tokens(composite_hits), None
 
-    # Mantém códigos técnicos ASCII claros (ex.: "Core i7", "Ryzen 7", "RTX 4060", "OLED 120Hz")
-    # desde que não pareçam prosa portuguesa não traduzível.
-    if cleaned.isascii() and not any(
-        word in {"nao", "sem", "muito", "pouco", "melhor", "bom", "boa", "preco"}
-        for word in norm_no_compat.split()
-    ):
+    # Vocabulário controlado: aceita somente códigos técnicos padronizados explicitamente reconhecidos.
+    # Qualquer texto livre em português (com ou sem acentos) é omitido para não zerar recall na eBay.
+    if cleaned.isascii() and _CONTROLLED_TECH_CODE_RE.match(norm_no_compat):
         return cleaned, None
 
     return None, f"unmapped_feature:{cleaned}"
@@ -515,6 +468,7 @@ class QueryBuilder:
         marketplace_id: str = "EBAY_US",
         default_budget_currency: str = "BRL",
         max_queries: int = 2,
+        max_query_length: int = MAX_QUERY_TEXT_LENGTH,
         extra_categories: Sequence[CategorySpec] | None = None,
         category_id_map: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
@@ -528,11 +482,14 @@ class QueryBuilder:
             raise ValueError("default_budget_currency deve ser um código ISO-3 válido.")
         if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
             raise ValueError("max_queries deve ser um inteiro positivo (>= 1).")
+        if isinstance(max_query_length, bool) or not isinstance(max_query_length, int) or max_query_length < 16:
+            raise ValueError("max_query_length deve ser um inteiro >= 16.")
 
         self._currency_converter = currency_converter
         self._marketplace_id = marketplace_id.strip().upper()
         self._default_budget_currency = default_budget_currency.strip().upper()
         self._max_queries = max_queries
+        self._max_query_length = max_query_length
 
         self._categories: dict[str, CategorySpec] = {}
         self._alias_to_canonical: dict[str, str] = {}
@@ -550,12 +507,18 @@ class QueryBuilder:
                 if cleaned_ids:
                     self._category_id_map[_norm_key(key)] = cleaned_ids
 
+    @property
+    def currency_converter(self) -> CurrencyConverter:
+        """Retorna o conversor cambial configurado para conciliação segura de orçamento."""
+        return self._currency_converter
+
     @classmethod
     def from_settings(
         cls,
         settings: Settings,
         *,
         max_queries: int = 2,
+        max_query_length: int = MAX_QUERY_TEXT_LENGTH,
         extra_categories: Sequence[CategorySpec] | None = None,
         category_id_map: Mapping[str, Sequence[str]] | None = None,
     ) -> QueryBuilder:
@@ -565,6 +528,7 @@ class QueryBuilder:
             currency_converter=converter,
             marketplace_id=settings.ebay_marketplace_id,
             max_queries=max_queries,
+            max_query_length=max_query_length,
             extra_categories=extra_categories,
             category_id_map=category_id_map,
         )
@@ -620,6 +584,7 @@ class QueryBuilder:
             translated, reason = _translate_feature_en(feat)
             if translated is not None:
                 pref_terms.append(translated)
+                ignored.append(f"deferred_preference:{feat}")
             elif reason is not None:
                 ignored.append(reason)
 
@@ -632,7 +597,7 @@ class QueryBuilder:
             brands=intent.brands,
             models=intent.models,
             category_term_en=category_term_en,
-            feature_terms=[*req_terms, *pref_terms],
+            feature_terms=req_terms,
             fallback_query=intent.query,
         )
 
@@ -762,17 +727,49 @@ class QueryBuilder:
             parts = [*clean_features] if clean_features else [self._fallback_ascii_query(fallback_query)]
 
         composed = _dedupe_tokens(parts)
-        return composed or self._fallback_ascii_query(fallback_query)
+        if not composed:
+            composed = self._fallback_ascii_query(fallback_query)
+        if len(composed) <= self._max_query_length:
+            return composed
+        truncated = composed[: self._max_query_length].rsplit(" ", 1)[0].strip()
+        return truncated or composed[: self._max_query_length].strip()
 
     @staticmethod
     def _fallback_ascii_query(fallback_query: str) -> str:
-        stopwords = {"para", "com", "sem", "ate", "de", "do", "da", "um", "uma", "quero", "preciso", "procuro"}
+        stopwords = {
+            "para",
+            "com",
+            "sem",
+            "ate",
+            "de",
+            "do",
+            "da",
+            "dos",
+            "das",
+            "um",
+            "uma",
+            "uns",
+            "umas",
+            "quero",
+            "preciso",
+            "procuro",
+            "gostaria",
+            "busco",
+            "bom",
+            "boa",
+            "melhor",
+            "barato",
+            "barata",
+            "resistente",
+            "dobravel",
+            "numerico",
+        }
         tokens = [
             tok
             for tok in fallback_query.strip().split()
-            if _norm_key(tok) not in stopwords
+            if tok.isascii() and _norm_key(tok) not in stopwords
         ]
-        cleaned = " ".join(tokens) if tokens else fallback_query.strip()
+        cleaned = " ".join(tokens) if tokens else " ".join(fallback_query.strip().split())
         return cleaned
 
     def _build_budget(self, intent: UserIntent) -> AppliedBudget:
@@ -842,20 +839,20 @@ class QueryBuilder:
     ) -> list[tuple[SearchQuery, str]]:
         candidates: list[tuple[SearchQuery, str]] = []
 
-        # 1) Remove preferências não obrigatórias mantendo todas as exigências rígidas.
+        # 1) Quando não há preferências relaxáveis, pode expandir incluindo preferências traduzidas.
         if pref_terms:
-            q_req_only = self._compose_query_text(
+            q_with_prefs = self._compose_query_text(
                 brands=intent.brands,
                 models=intent.models,
                 category_term_en=category_term_en,
-                feature_terms=req_terms,
+                feature_terms=[*req_terms, *pref_terms],
                 fallback_query=intent.query,
             )
-            if _norm_key(q_req_only) != _norm_key(base_query.query_text):
+            if _norm_key(q_with_prefs) != _norm_key(base_query.query_text):
                 candidates.append(
                     (
-                        base_query.model_copy(update={"query_text": q_req_only}),
-                        "Consulta alternativa mantendo apenas requisitos obrigatórios sem preferências.",
+                        base_query.model_copy(update={"query_text": q_with_prefs}),
+                        "Consulta alternativa refinada incluindo preferências opcionais traduzidas.",
                     )
                 )
 
@@ -972,7 +969,12 @@ def build_search_plan_from_text(
         raise TypeError("O extrator deve retornar uma instância validada de UserIntent.")
 
     reconciled_intent = (
-        merge_explicit_budget(raw_intent, budget_brl, currency="BRL")
+        merge_explicit_budget(
+            raw_intent,
+            budget_brl,
+            currency="BRL",
+            currency_converter=query_builder.currency_converter,
+        )
         if budget_brl is not None
         else raw_intent
     )

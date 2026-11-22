@@ -8,6 +8,10 @@ from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, ConfigDict
 
+from buscai.catalog_registry import (
+    build_category_detection_keywords,
+    build_category_priority_aspects,
+)
 from buscai.search.models import Candidate
 
 _FORBIDDEN_ASPECT_FRAGMENTS: tuple[str, ...] = (
@@ -85,15 +89,7 @@ _KNOWN_BRANDS: tuple[tuple[str, str], ...] = (
 
 _APPLE_EXCLUSIVE_LINES = ("iphone", "macbook", "airpods")
 
-_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("smartphone", ("smartphone", "smartphones", "cell phone", "celular", "iphone", "galaxy s", "pixel")),
-    ("notebook", ("laptop", "laptops", "notebook", "notebooks", "ultrabook", "macbook", "chromebook")),
-    ("monitor", ("monitor", "monitors", "computer monitor")),
-    (
-        "fone de ouvido",
-        ("headphones", "headphone", "headset", "earbuds", "earbud", "earphones", "airpods", "fone de ouvido"),
-    ),
-)
+_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = build_category_detection_keywords()
 
 _ACCESSORY_MARKERS = ("case", "cover", "bag", "sleeve", "charger", "adapter", "cable", "stand", "screen protector", "skin")
 
@@ -215,7 +211,6 @@ _NOISE_MODEL_WORDS: frozenset[str] = frozenset(
         "qled",
         "va",
         "tn",
-        "mini",
         "hdr",
         "uhd",
         "qhd",
@@ -265,8 +260,32 @@ _NOISE_MODEL_WORDS: frozenset[str] = frozenset(
     }
 )
 
-_VARIANT_TIER_TOKENS: frozenset[str] = frozenset(
+VARIANT_TIER_TOKENS: frozenset[str] = frozenset(
     {"pro", "max", "plus", "ultra", "mini", "air", "se", "lite", "fe", "ti", "super", "xl", "fold", "flip"}
+)
+_VARIANT_TIER_TOKENS: frozenset[str] = VARIANT_TIER_TOKENS
+
+DEFAULT_MAX_EMBEDDING_CHARS = 1600
+_MAX_SHORT_DESCRIPTION_CHARS = 320
+
+_COMMON_PRIORITY_ASPECT_KEYS: tuple[str, ...] = (
+    "model",
+    "modelo",
+    "mpn",
+    "manufacturer part number",
+    "part number",
+    "brand",
+    "marca",
+    "condition",
+)
+
+_CATEGORY_PRIORITY_ASPECT_KEYS: dict[str, tuple[str, ...]] = build_category_priority_aspects()
+
+_BUDGET_CLAUSE_RE = re.compile(
+    r"(?:,?\s*\b(?:ate|até|abaixo\s+de|menos\s+de|no\s+maximo|no\s+máximo|sem\s+ultrapassar|por\s+ate|por\s+até|entre)\s+"
+    r"(?:r\$|rs|us\$|usd|brl|\$|€|eur)?\s*\d[\d.,]*(?:\s*(?:e|a)\s*(?:r\$|rs|us\$|usd|brl|\$|€|eur)?\s*\d[\d.,]*)?"
+    r"(?:\s*(?:reais|real|dolares|dólares|dolar|dólar|brl|usd))?)",
+    re.IGNORECASE,
 )
 
 _SLASH_MEM_STORAGE_RE = re.compile(r"\b(\d{1,3})\s*gb\s*/\s*(\d{1,4}(?:[.,]\d+)?)\s*(gb|tb)\b", re.IGNORECASE)
@@ -336,16 +355,80 @@ def build_query_embedding_text(query_text: str) -> str:
     return " ".join(query_text.strip().split())
 
 
-def build_candidate_embedding_text(candidate: Candidate) -> str:
-    """Constrói representação textual concisa somente com campos úteis à comparação semântica.
+def build_semantic_query_text(query_text: str, *, intent: object | None = None) -> str:
+    """Contrato explícito de consulta semântica (A14): texto descritivo limpo sem ruído transacional.
+
+    Quando `intent` estruturado (ex.: `UserIntent`) for fornecido, compõe a consulta semântica a
+    partir de marca, modelo, categoria, características técnicas e casos de uso, excluindo limites
+    numéricos de orçamento/moeda. Caso contrário, normaliza `query_text` removendo cláusulas
+    monetárias explícitas quando restar conteúdo descritivo útil.
+    """
+    cleaned_raw = build_query_embedding_text(query_text)
+    if intent is not None:
+        parts: list[str] = []
+        seen: set[str] = set()
+
+        def _append_unique(value: object) -> None:
+            if not isinstance(value, str):
+                return
+            cleaned = " ".join(value.strip().split())
+            if not cleaned:
+                return
+            key = _norm_text(cleaned)
+            if key and key not in seen:
+                seen.add(key)
+                parts.append(cleaned)
+
+        for field_name in ("brands", "models"):
+            vals = getattr(intent, field_name, ()) or ()
+            for val in vals:
+                _append_unique(val)
+        _append_unique(getattr(intent, "category", None))
+        for field_name in ("required_features", "preferred_features", "use_cases"):
+            vals = getattr(intent, field_name, ()) or ()
+            for val in vals:
+                _append_unique(val)
+        if parts:
+            return " ".join(parts)
+        intent_query = getattr(intent, "query", None)
+        if isinstance(intent_query, str) and intent_query.strip():
+            cleaned_raw = build_query_embedding_text(intent_query)
+
+    stripped_budget = " ".join(_BUDGET_CLAUSE_RE.sub(" ", cleaned_raw).split()).strip(" ,.-;")
+    return stripped_budget if stripped_budget else cleaned_raw
+
+
+def _aspect_priority_rank(key: str, canonical_category: str | None) -> tuple[int, int, str]:
+    norm_key = key.strip().casefold()
+    cat_keys = _CATEGORY_PRIORITY_ASPECT_KEYS.get(canonical_category or "", ())
+    for idx, target in enumerate(cat_keys):
+        if norm_key == target:
+            return (0, idx, norm_key)
+    for idx, target in enumerate(_COMMON_PRIORITY_ASPECT_KEYS):
+        if norm_key == target:
+            return (1, idx, norm_key)
+    return (2, 0, norm_key)
+
+
+def build_candidate_embedding_text(
+    candidate: Candidate,
+    *,
+    category_hint: str | None = None,
+    max_chars: int = DEFAULT_MAX_EMBEDDING_CHARS,
+) -> str:
+    """Constrói representação textual concisa priorizando atributos técnicos críticos por categoria.
 
     Exclui explicitamente preço, moeda, URLs, vendedor, frete, opções de compra e `item_id`.
     """
     if not isinstance(candidate, Candidate):
         raise TypeError("candidate deve ser uma instância válida de Candidate.")
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 64:
+        raise ValueError("max_chars deve ser um inteiro >= 64.")
 
-    parts: list[str] = [candidate.title.strip()]
-    title_norm = _norm_text(candidate.title)
+    title_clean = " ".join(candidate.title.strip().split())
+    parts: list[str] = [title_clean]
+    title_norm = _norm_text(title_clean)
+    canonical_category = _detect_category(candidate, title_norm, category_hint)
 
     if candidate.brand and _norm_text(candidate.brand) not in title_norm:
         parts.append(f"Brand: {candidate.brand}")
@@ -359,17 +442,41 @@ def build_candidate_embedding_text(candidate: Candidate) -> str:
     if candidate.condition:
         parts.append(f"Condition: {candidate.condition}")
 
-    if candidate.short_description:
-        parts.append(candidate.short_description)
-
-    for key, values in sorted(candidate.aspects.items()):
+    sorted_aspects = sorted(
+        candidate.aspects.items(),
+        key=lambda item: _aspect_priority_rank(item[0], canonical_category),
+    )
+    for key, values in sorted_aspects:
         if _is_forbidden_aspect_key(key):
             continue
-        valid_vals = [v for v in values if v.strip() and v.strip().casefold() not in _SKIP_NOISE_VALUES]
+        valid_vals = [v.strip() for v in values if v.strip() and v.strip().casefold() not in _SKIP_NOISE_VALUES]
         if valid_vals:
             parts.append(f"{key}: {', '.join(valid_vals)}")
 
-    return " | ".join(parts)
+    if candidate.short_description:
+        desc_clean = " ".join(candidate.short_description.strip().split())
+        if desc_clean:
+            if len(desc_clean) > _MAX_SHORT_DESCRIPTION_CHARS:
+                desc_clean = desc_clean[:_MAX_SHORT_DESCRIPTION_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:")
+            if desc_clean:
+                parts.append(desc_clean)
+
+    # Monta segmentos respeitando `max_chars` sem cortar atributos prioritários.
+    selected: list[str] = []
+    current_len = 0
+    for idx, segment in enumerate(parts):
+        sep_len = 3 if idx > 0 else 0
+        if idx == 0:
+            if len(segment) > max_chars:
+                return segment[:max_chars].rstrip()
+            selected.append(segment)
+            current_len = len(segment)
+            continue
+        if current_len + sep_len + len(segment) <= max_chars:
+            selected.append(segment)
+            current_len += sep_len + len(segment)
+
+    return " | ".join(selected)
 
 
 class ProductStructuredAttributes(BaseModel):
@@ -680,30 +787,36 @@ def _extract_model_tokens(
     cleaned_title = _SCREEN_INCH_RE.sub(" ", cleaned_title)
     cleaned_title = _HZ_RE.sub(" ", cleaned_title)
     cleaned_title = _TAGGED_ID_RE.sub(" ", cleaned_title)
+    cleaned_title = re.sub(r"\bmini[\s-]?led\b", " ", cleaned_title, flags=re.IGNORECASE)
+    cleaned_title = re.sub(r"\b(?:wqhd|qhd\+|qhd|uhd|fhd|full\s*hd|4k|5k|8k|720p|1080p|1440p|2160p)\b", " ", cleaned_title, flags=re.IGNORECASE)
     model_sources.append(cleaned_title)
 
     brand_tokens = set(brand.split()) if brand else set()
     tokens: list[str] = []
     seen: set[str] = set()
 
+    def _emit_token(tok: str) -> None:
+        if tok and tok not in seen:
+            seen.add(tok)
+            tokens.append(tok)
+
     for source in model_sources:
-        for raw_tok in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", source):
-            norm_tok = raw_tok.replace("-", "")
+        for raw_tok in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*\+?", source):
+            has_plus = raw_tok.endswith("+")
+            base_raw = raw_tok[:-1] if has_plus else raw_tok
+            norm_tok = base_raw.replace("-", "")
             if not norm_tok:
                 continue
-            if norm_tok in _NOISE_MODEL_WORDS or raw_tok in _NOISE_MODEL_WORDS:
+            if norm_tok in _NOISE_MODEL_WORDS or base_raw in _NOISE_MODEL_WORDS:
                 continue
-            if norm_tok in brand_tokens or raw_tok in brand_tokens:
+            if norm_tok in brand_tokens or base_raw in brand_tokens:
                 continue
-            # Mantém dígitos curtos (ex.: "15", "3") apenas se houver letras próximas ou se vierem de modelo.
             if norm_tok.isdigit() and len(norm_tok) > 2:
-                # Anos tipo 2024 ou nits (400) sem código de modelo claro podem ser ignorados só se isolados?
-                # Preservar anos 2020-2029 e números de modelo como 1000/14/15/27; ignorar ruído longo > 4 dígitos.
                 if len(norm_tok) >= 5:
                     continue
-            if norm_tok not in seen:
-                seen.add(norm_tok)
-                tokens.append(norm_tok)
+            _emit_token(norm_tok)
+            if has_plus:
+                _emit_token("plus")
 
     return tuple(tokens)
 
@@ -753,9 +866,12 @@ def extract_product_attributes(
 
 
 __all__ = [
+    "DEFAULT_MAX_EMBEDDING_CHARS",
     "ProductStructuredAttributes",
+    "VARIANT_TIER_TOKENS",
     "build_candidate_embedding_text",
     "build_query_embedding_text",
+    "build_semantic_query_text",
     "extract_product_attributes",
     "_VARIANT_TIER_TOKENS",
 ]

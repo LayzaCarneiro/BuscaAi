@@ -170,3 +170,29 @@ def test_stub_provider_cross_lingual_similarity_validation_and_ranker() -> None:
 
     sim = cosine_similarity_matrix(service.embed_query("fone Bluetooth"), service.embed_query("Bluetooth headphones"))
     assert sim[0, 0] > 0.5
+
+
+def test_a14_e5_uses_query_prefix_for_symmetric_dedup_and_passage_for_retrieval() -> None:
+    encode_calls: list[list[str]] = []
+
+    class FakeE5Model:
+        def get_sentence_embedding_dimension(self) -> int:
+            return 4
+
+        def encode(self, texts, **_kwargs):
+            encode_calls.append(list(texts))
+            return np.ones((len(texts), 4), dtype=np.float32)
+
+    provider = SentenceTransformerEmbeddingProvider(RECOMMENDED_MODEL_NAME, model_loader=lambda _n, _d: FakeE5Model())
+    service = EmbeddingService(provider)
+    assert service.model_info().symmetric_prefix == "query: "
+
+    cands = [
+        Candidate(item_id="1", source="ebay", title="Lenovo ThinkPad X1 Carbon", price=Decimal("900"), currency="USD"),
+        Candidate(item_id="2", source="ebay", title="ThinkPad X1 Carbon Lenovo", price=Decimal("880"), currency="USD"),
+    ]
+    service.embed_candidates(cands, mode="symmetric_similarity")
+    service.embed_candidates(cands, mode="retrieval_document")
+
+    assert all(text.startswith("query: ") for text in encode_calls[0])
+    assert all(text.startswith("passage: ") for text in encode_calls[1])

@@ -18,7 +18,7 @@ from buscai.search.models import Candidate
 from buscai.semantic.embeddings import EmbeddingService, cosine_similarity_matrix
 from buscai.semantic.representation import (
     ProductStructuredAttributes,
-    _VARIANT_TIER_TOKENS,
+    VARIANT_TIER_TOKENS,
     extract_product_attributes,
 )
 
@@ -98,24 +98,32 @@ class PairEvaluation(BaseModel):
 
 
 class DuplicateGroup(BaseModel):
-    """Grupo consolidado de anúncios identificados como duplicatas prováveis."""
+    """Grupo consolidado de ofertas equivalentes de um mesmo produto."""
 
     model_config = ConfigDict(frozen=True)
 
+    group_id: str = ""
     canonical: Candidate
+    offers: tuple[Candidate, ...] = ()
     duplicate_item_ids: tuple[str, ...] = ()
     max_similarity: float
     reasons: tuple[str, ...] = ()
 
+    @property
+    def offer_count(self) -> int:
+        return len(self.offers) if self.offers else len(self.duplicate_item_ids)
+
 
 class DeduplicationResult(BaseModel):
-    """Saída transitória da deduplicação preservando apenas metadados e candidatos únicos."""
+    """Saída transitória da deduplicação preservando ofertas distintas e grupos de produto."""
 
     model_config = ConfigDict(frozen=True)
 
     candidates: tuple[Candidate, ...] = ()
+    canonical_candidates: tuple[Candidate, ...] = ()
     groups: tuple[DuplicateGroup, ...] = ()
     removed_count: int = Field(default=0, ge=0)
+    grouped_offers_count: int = Field(default=0, ge=0)
     similar_pairs: tuple[PairEvaluation, ...] = ()
     pair_evaluations: tuple[PairEvaluation, ...] = ()
 
@@ -125,7 +133,7 @@ def _strong_model_codes(tokens: tuple[str, ...]) -> set[str]:
 
 
 def _tier_tokens(tokens: tuple[str, ...]) -> set[str]:
-    return {tok for tok in tokens if tok in _VARIANT_TIER_TOKENS}
+    return {tok for tok in tokens if tok in VARIANT_TIER_TOKENS}
 
 
 def _check_model_compatibility(
@@ -133,8 +141,10 @@ def _check_model_compatibility(
     right: ProductStructuredAttributes,
 ) -> tuple[bool, bool, str | None]:
     """Avalia identidade de modelo retornando `(tem_conflito, modelo_confirmado, motivo)`."""
-    if not left.model_tokens or not right.model_tokens:
-        return False, False, None
+    if not left.model_tokens and not right.model_tokens:
+        return False, False, "missing_model_identity"
+    if bool(left.model_tokens) != bool(right.model_tokens):
+        return False, False, "one_sided_model_identity"
 
     left_tiers = _tier_tokens(left.model_tokens)
     right_tiers = _tier_tokens(right.model_tokens)
@@ -143,16 +153,18 @@ def _check_model_compatibility(
 
     left_codes = _strong_model_codes(left.model_tokens)
     right_codes = _strong_model_codes(right.model_tokens)
+    if bool(left_codes) != bool(right_codes):
+        return False, False, "one_sided_model_code"
     if left_codes and right_codes:
         if left_codes != right_codes:
             if left_codes.isdisjoint(right_codes):
                 return True, False, "distinct_model_codes"
             return True, False, "uncertain_submodel_codes"
 
-    left_set = {tok for tok in left.model_tokens if tok not in _VARIANT_TIER_TOKENS}
-    right_set = {tok for tok in right.model_tokens if tok not in _VARIANT_TIER_TOKENS}
+    left_set = {tok for tok in left.model_tokens if tok not in VARIANT_TIER_TOKENS}
+    right_set = {tok for tok in right.model_tokens if tok not in VARIANT_TIER_TOKENS}
     if not left_set or not right_set:
-        return False, False, None
+        return False, False, "tier_only_model_tokens"
 
     intersection = left_set & right_set
     union = left_set | right_set
@@ -170,6 +182,7 @@ def _check_model_compatibility(
 
 
 def _candidate_completeness_score(candidate: Candidate, original_index: int) -> tuple[object, ...]:
+    """Pontua qualidade estruturada e menor preço para eleger o representante do grupo (sem tamanho de título)."""
     return (
         1 if candidate.details_loaded else 0,
         len(candidate.aspects),
@@ -178,7 +191,7 @@ def _candidate_completeness_score(candidate: Candidate, original_index: int) -> 
         1 if candidate.short_description is not None else 0,
         1 if candidate.seller is not None else 0,
         1 if candidate.shipping is not None else 0,
-        len(candidate.title),
+        -candidate.price,
         -original_index,
     )
 
@@ -273,6 +286,12 @@ class ProductDeduplicator:
 
         if (l_attr.condition_bucket == "parts") != (r_attr.condition_bucket == "parts"):
             vetoes.append("parts_vs_functional_mismatch")
+        elif (
+            l_attr.condition_bucket is not None
+            and r_attr.condition_bucket is not None
+            and l_attr.condition_bucket != r_attr.condition_bucket
+        ):
+            vetoes.append("condition_mismatch")
 
         model_conflict, model_confirmed, model_reason = _check_model_compatibility(l_attr, r_attr)
         if model_conflict and model_reason is not None:
@@ -299,6 +318,15 @@ class ProductDeduplicator:
                 uncertainty_reasons.append("uncertain_ram_variant")
             if (l_attr.resolution is None) != (r_attr.resolution is None):
                 uncertainty_reasons.append("uncertain_resolution_variant")
+            if (l_attr.condition_bucket is None) != (r_attr.condition_bucket is None):
+                uncertainty_reasons.append("uncertain_condition_variant")
+            if model_reason in {
+                "one_sided_model_identity",
+                "missing_model_identity",
+                "one_sided_model_code",
+                "tier_only_model_tokens",
+            }:
+                uncertainty_reasons.append(model_reason)
 
         if shared_mfg_ids:
             return PairEvaluation(
@@ -334,7 +362,13 @@ class ProductDeduplicator:
             semantic_similarity >= self._config.probable_duplicate_semantic_threshold
             and l_attr.brand is not None
             and l_attr.brand == r_attr.brand
-            and model_reason != "partial_model_overlap"
+            and model_reason not in {
+                "partial_model_overlap",
+                "one_sided_model_identity",
+                "missing_model_identity",
+                "one_sided_model_code",
+                "tier_only_model_tokens",
+            }
         ):
             return PairEvaluation(
                 left_item_id=left_candidate.item_id,
@@ -382,38 +416,70 @@ class ProductDeduplicator:
         vectors: np.ndarray | None = None,
         category_hint: str | None = None,
         request_id: str | None = None,
+        include_pair_evaluations: bool = False,
     ) -> DeduplicationResult:
-        """Agrupa duplicatas prováveis preservando variantes distintas e produtos semelhantes."""
+        """Agrupa ofertas equivalentes preservando todos os anúncios distintos e suas ofertas.
+
+        - Duplicatas exatas de anúncio (mesmo `item_id` vindo de múltiplas queries) são colapsadas.
+        - Anúncios distintos (`item_id` diferentes) do mesmo produto são agrupados em `DuplicateGroup`,
+          mas todas as ofertas permanecem preservadas em `result.candidates` e `group.offers`.
+        """
         if isinstance(candidates, (str, bytes)) or not isinstance(candidates, Sequence):
             raise ValueError("candidates deve ser uma sequência válida de Candidate.")
         if not candidates:
             return DeduplicationResult()
-        if len(candidates) == 1:
-            single = candidates[0]
+
+        started = time.monotonic()
+
+        # Passo 1: remove apenas duplicatas exatas pelo identificador do anúncio (`item_id`),
+        # mantendo a versão mais completa para cada anúncio.
+        best_by_item_id: dict[str, tuple[int, Candidate]] = {}
+        for orig_idx, cand in enumerate(candidates):
+            existing = best_by_item_id.get(cand.item_id)
+            if existing is None or _candidate_completeness_score(cand, orig_idx) > _candidate_completeness_score(
+                existing[1], existing[0]
+            ):
+                best_by_item_id[cand.item_id] = (orig_idx, cand)
+
+        unique_offer_entries = sorted(best_by_item_id.values(), key=lambda entry: entry[0])
+        unique_indices = [entry[0] for entry in unique_offer_entries]
+        unique_offers = tuple(entry[1] for entry in unique_offer_entries)
+        exact_removed = len(candidates) - len(unique_offers)
+
+        n = len(unique_offers)
+        if n == 1:
+            single = unique_offers[0]
             return DeduplicationResult(
                 candidates=(single,),
+                canonical_candidates=(single,),
                 groups=(
                     DuplicateGroup(
+                        group_id=f"product:{single.item_id}",
                         canonical=single,
+                        offers=(single,),
                         duplicate_item_ids=(single.item_id,),
                         max_similarity=1.0,
                         reasons=("singleton",),
                     ),
                 ),
-                removed_count=0,
+                removed_count=exact_removed,
+                grouped_offers_count=0,
             )
 
-        started = time.monotonic()
-        n = len(candidates)
-
         if vectors is not None:
-            local_vectors = np.asarray(vectors, dtype=np.float32)
-            if local_vectors.ndim != 2 or local_vectors.shape[0] != n:
+            raw_vectors = np.asarray(vectors, dtype=np.float32)
+            if raw_vectors.ndim != 2 or raw_vectors.shape[0] != len(candidates):
                 raise ValueError(
-                    f"vectors deve possuir {n} linhas compatíveis com candidates; recebido {local_vectors.shape}."
+                    f"vectors deve possuir {len(candidates)} linhas compatíveis com candidates; recebido {raw_vectors.shape}."
                 )
+            local_vectors = raw_vectors[unique_indices]
         elif self._embedding_service is not None:
-            local_vectors = self._embedding_service.embed_candidates(candidates, request_id=request_id)
+            local_vectors = self._embedding_service.embed_candidates(
+                unique_offers,
+                mode="symmetric_similarity",
+                category_hint=category_hint,
+                request_id=request_id,
+            )
         else:
             raise ValueError("Forneça embedding_service ou vectors para executar deduplicação semântica.")
 
@@ -421,25 +487,47 @@ class ProductDeduplicator:
         # Libera referência local ao array de embeddings após computar similaridades escalares.
         del local_vectors
 
-        attrs = [extract_product_attributes(cand, category_hint=category_hint) for cand in candidates]
+        attrs = [extract_product_attributes(cand, category_hint=category_hint) for cand in unique_offers]
+        mfg_sets = [set(attr.manufacturer_ids) for attr in attrs]
+        sim_threshold = self._config.similar_product_semantic_threshold
 
-        pair_evals: dict[tuple[int, int], PairEvaluation] = {}
+        probable_pairs: set[tuple[int, int]] = set()
+        probable_pair_meta: dict[tuple[int, int], tuple[float, tuple[str, ...]]] = {}
         similar_pairs: list[PairEvaluation] = []
         all_evaluations: list[PairEvaluation] = []
 
         for i in range(n):
+            a_i = attrs[i]
+            m_i = mfg_sets[i]
             for j in range(i + 1, n):
+                sim_val = float(sim_matrix[i, j])
+                if not include_pair_evaluations:
+                    # Filtro O(1) exato (A10): se não há MPN compartilhado, cosseno abaixo do limiar de
+                    # semelhança e não compartilha (categoria, marca), o par é comprovadamente `different_product`.
+                    has_shared_mfg = bool(m_i and mfg_sets[j] and (m_i & mfg_sets[j]))
+                    same_cat_brand = (
+                        a_i.canonical_category is not None
+                        and a_i.canonical_category == attrs[j].canonical_category
+                        and a_i.brand is not None
+                        and a_i.brand == attrs[j].brand
+                    )
+                    if not has_shared_mfg and sim_val < sim_threshold and not same_cat_brand:
+                        continue
+
                 ev = self.classify_pair(
-                    candidates[i],
-                    candidates[j],
-                    left_attrs=attrs[i],
+                    unique_offers[i],
+                    unique_offers[j],
+                    left_attrs=a_i,
                     right_attrs=attrs[j],
-                    semantic_similarity=float(sim_matrix[i, j]),
+                    semantic_similarity=sim_val,
                     category_hint=category_hint,
                 )
-                pair_evals[(i, j)] = ev
-                all_evaluations.append(ev)
-                if ev.classification == "similar_product":
+                if include_pair_evaluations:
+                    all_evaluations.append(ev)
+                if ev.classification == "probable_duplicate":
+                    probable_pairs.add((i, j))
+                    probable_pair_meta[(i, j)] = (ev.semantic_similarity, ev.reasons)
+                elif ev.classification == "similar_product":
                     similar_pairs.append(ev)
 
         # Agrupamento com guarda de clique completa (evita transitividade indevida entre variantes conflitantes).
@@ -447,11 +535,7 @@ class ProductDeduplicator:
         for idx in range(n):
             placed = False
             for cluster in clusters:
-                is_compatible_with_all = all(
-                    pair_evals[(min(member, idx), max(member, idx))].classification == "probable_duplicate"
-                    for member in cluster
-                )
-                if is_compatible_with_all:
+                if all((min(member, idx), max(member, idx)) in probable_pairs for member in cluster):
                     cluster.append(idx)
                     placed = True
                     break
@@ -461,14 +545,17 @@ class ProductDeduplicator:
         canonical_items: list[Candidate] = []
         groups: list[DuplicateGroup] = []
         for cluster in clusters:
-            best_idx = max(cluster, key=lambda idx: _candidate_completeness_score(candidates[idx], idx))
-            canonical = candidates[best_idx]
+            best_idx = max(cluster, key=lambda idx: _candidate_completeness_score(unique_offers[idx], idx))
+            canonical = unique_offers[best_idx]
             canonical_items.append(canonical)
+            group_offers = tuple(unique_offers[idx] for idx in cluster)
 
             if len(cluster) == 1:
                 groups.append(
                     DuplicateGroup(
+                        group_id=f"product:{canonical.item_id}",
                         canonical=canonical,
+                        offers=group_offers,
                         duplicate_item_ids=(canonical.item_id,),
                         max_similarity=1.0,
                         reasons=("singleton",),
@@ -479,36 +566,41 @@ class ProductDeduplicator:
                 group_reasons: list[str] = []
                 for p_i in range(len(cluster)):
                     for p_j in range(p_i + 1, len(cluster)):
-                        a_idx, b_idx = min(cluster[p_i], cluster[p_j]), max(cluster[p_i], cluster[p_j])
-                        ev = pair_evals[(a_idx, b_idx)]
-                        group_sims.append(ev.semantic_similarity)
-                        group_reasons.extend(ev.reasons)
+                        sim_pair, reasons_pair = probable_pair_meta[
+                            (min(cluster[p_i], cluster[p_j]), max(cluster[p_i], cluster[p_j]))
+                        ]
+                        group_sims.append(sim_pair)
+                        group_reasons.extend(reasons_pair)
                 groups.append(
                     DuplicateGroup(
+                        group_id=f"product:{canonical.item_id}",
                         canonical=canonical,
-                        duplicate_item_ids=tuple(candidates[idx].item_id for idx in cluster),
+                        offers=group_offers,
+                        duplicate_item_ids=tuple(offer.item_id for offer in group_offers),
                         max_similarity=max(group_sims) if group_sims else 1.0,
                         reasons=tuple(dict.fromkeys(group_reasons)),
                     )
                 )
 
-        removed = n - len(canonical_items)
+        grouped_offers_count = n - len(groups)
         if self._logger is not None:
             log_operational_event(
                 self._logger,
                 logging.INFO,
                 "semantic_deduplication_completed",
                 stage="semantic_dedup",
-                candidate_count=n,
-                result_count=len(canonical_items),
+                candidate_count=len(candidates),
+                result_count=len(unique_offers),
                 duration_ms=round((time.monotonic() - started) * 1000.0, 2),
                 request_id=request_id,
             )
 
         return DeduplicationResult(
-            candidates=tuple(canonical_items),
+            candidates=unique_offers,
+            canonical_candidates=tuple(canonical_items),
             groups=tuple(groups),
-            removed_count=removed,
+            removed_count=exact_removed,
+            grouped_offers_count=grouped_offers_count,
             similar_pairs=tuple(similar_pairs),
             pair_evaluations=tuple(all_evaluations),
         )
