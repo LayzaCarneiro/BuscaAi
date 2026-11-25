@@ -47,6 +47,7 @@ def _candidate_from_synthetic(raw: dict[str, object], *, default_price: str = "5
         title=str(raw["title"]),
         price=Decimal(default_price),
         currency="USD",
+        condition=str(raw["condition"]) if raw.get("condition") else None,
         brand=str(raw["brand"]) if raw.get("brand") else None,
         model=str(raw["model"]) if raw.get("model") else None,
         short_description=str(raw["short_description"]) if raw.get("short_description") else None,

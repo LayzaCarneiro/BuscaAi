@@ -9,7 +9,6 @@ from buscai.validation import (
     CategoryDefinition,
     EvidenceValidator,
     ProfileCriterion,
-    ProfileRegistry,
     load_default_registry,
 )
 from buscai.search.models import Candidate

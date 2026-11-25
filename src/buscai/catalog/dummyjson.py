@@ -59,7 +59,17 @@ class DummyJsonCatalog(CatalogProvider):
         total = payload.get("total")
         page_skip = payload.get("skip")
         page_limit = payload.get("limit")
-        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (total, page_skip, page_limit)):
+        if (
+            not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 0
+            or not isinstance(page_skip, int)
+            or isinstance(page_skip, bool)
+            or page_skip < 0
+            or not isinstance(page_limit, int)
+            or isinstance(page_limit, bool)
+            or page_limit < 0
+        ):
             raise CatalogError("Resposta inválida do DummyJSON: paginação ausente ou incorreta.")
         # O DummyJSON informa a quantidade efetiva na última página.
         if page_skip != skip or page_limit > limit or len(payload["products"]) > page_limit:

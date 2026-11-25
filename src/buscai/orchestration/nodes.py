@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import TypedDict
 
 from buscai.catalog.errors import (
     CatalogError,
@@ -108,11 +109,16 @@ def _classify_error(node: str, exc: Exception) -> OrchestrationError:
     )
 
 
+class _NodeMeta(TypedDict):
+    executed_nodes: tuple[str, ...]
+    node_durations_ms: dict[str, float]
+
+
 def _record_node(
     state: SearchGraphState,
     node_name: str,
     started_at: float,
-) -> dict[str, object]:
+) -> _NodeMeta:
     elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
     prev_nodes = state.get("executed_nodes", ())
     prev_durations = dict(state.get("node_durations_ms", {}))
@@ -397,7 +403,7 @@ def finalize_node(
     rank_res = state.get("ranking_result")
     err = state.get("error")
 
-    total_duration_ms = round(sum(meta["node_durations_ms"].values()), 3)  # type: ignore[union-attr]
+    total_duration_ms = round(sum(meta["node_durations_ms"].values()), 3)
     logger = deps.logger or _LOGGER
     log_operational_event(
         logger,

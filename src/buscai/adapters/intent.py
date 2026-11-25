@@ -93,7 +93,9 @@ def _stem(token: str) -> str:
     return token
 
 def _same_category(product_category: str, wanted: str) -> bool:
-    stem = lambda text: [_stem(t) for t in normalize_text(text).split()]
+    def stem(text: str) -> list[str]:
+        return [_stem(t) for t in normalize_text(text).split()]
+
     return stem(product_category) == stem(wanted)
 
 
@@ -186,7 +188,7 @@ def search_intent(
         or not budget_currency.isalpha()
     ):
         raise ConstraintUnavailableError("Informe a moeda do orçamento para aplicar a restrição de preço.")
-    budget_currency = budget_currency.upper() if hard_price else None
+    budget_currency = budget_currency.upper() if hard_price and isinstance(budget_currency, str) else None
 
     preferences: list[str] = []
     if criteria.brands:

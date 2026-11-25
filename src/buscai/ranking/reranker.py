@@ -40,6 +40,8 @@ from buscai.validation.models import (
     ValidationPipelineResult,
 )
 
+from buscai.search.models import Candidate
+
 _INF_COST = Decimal("999999999999")
 
 
@@ -85,6 +87,12 @@ def _offer_sort_key(
         -(float(seller_feedback_pct) if seller_feedback_pct is not None else -1.0),
         item_id,
     )
+
+
+def _seller_feedback_pct(candidate: Candidate) -> float | None:
+    if candidate.seller is None or candidate.seller.feedback_percentage is None:
+        return None
+    return float(candidate.seller.feedback_percentage)
 
 
 def _is_rejected(
@@ -316,9 +324,7 @@ class MultiCriteriaReranker:
                     iid,
                     offer_states[iid],
                     offer_breakdowns[iid],
-                    validations_by_id[iid].candidate.seller.feedback_percentage
-                    if validations_by_id[iid].candidate.seller
-                    else None,
+                    _seller_feedback_pct(validations_by_id[iid].candidate),
                 ),
             )
 
@@ -388,9 +394,7 @@ class MultiCriteriaReranker:
                 group_offers_ranked[gid][0].item_id,
                 group_states[gid],
                 group_breakdowns[group_offers_ranked[gid][0].item_id],
-                group_offers_ranked[gid][0].candidate.seller.feedback_percentage
-                if group_offers_ranked[gid][0].candidate.seller
-                else None,
+                _seller_feedback_pct(group_offers_ranked[gid][0].candidate),
             ),
         )
 
