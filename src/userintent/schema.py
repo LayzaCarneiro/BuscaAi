@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _CURRENCY_ALIASES: dict[str, str] = {
     "brl": "BRL",
@@ -97,6 +97,15 @@ class PriceConstraint(BaseModel):
         if v is not None and min_price is not None and v < min_price:
             raise ValueError("max_price must be >= min_price")
         return v
+
+    @model_validator(mode="after")
+    def _normalize_empty_bounds(self) -> "PriceConstraint":
+        """Garante valores neutros quando nenhum limite numérico de preço foi definido."""
+        if self.min_price is None and self.max_price is None:
+            self.min_inclusive = True
+            self.max_inclusive = True
+            self.is_hard_constraint = False
+        return self
 
 
 class UserIntent(BaseModel):

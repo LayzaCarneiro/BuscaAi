@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
@@ -192,6 +192,6 @@ class SearchOrchestrator:
         )
 
         # Explicitly drop transient graph state references before returning.
-        initial_state.clear()
-        final_state.clear()
+        cast(dict[str, object], initial_state).clear()
+        cast(dict[str, object], final_state).clear()
         return result

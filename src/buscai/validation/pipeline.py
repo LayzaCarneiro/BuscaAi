@@ -15,7 +15,7 @@ from buscai.search.quota import RequestCallBudget
 from buscai.semantic.dedup import DuplicateGroup, ProductDeduplicator
 from buscai.semantic.pipeline import SemanticProcessingResult, merge_search_responses
 from buscai.validation.enrichment import SelectiveEnricher
-from buscai.validation.models import CandidateValidationResult, ValidationPipelineResult
+from buscai.validation.models import ValidationPipelineResult
 from buscai.validation.relaxation import RelaxationConfig, RelaxationEngine
 from buscai.validation.validator import EvidenceValidator
 from userintent.schema import UserIntent

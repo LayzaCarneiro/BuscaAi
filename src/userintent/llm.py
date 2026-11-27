@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Optional
@@ -60,7 +61,56 @@ def _validate_non_negative_finite(value: float, name: str) -> float:
     return numeric
 
 
+def _extract_http_status(exc: Exception) -> int | None:
+    for attr in ("code", "status_code"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and not isinstance(val, bool):
+            return val
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        status = getattr(resp, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool):
+            return status
+    return None
+
+
+def _extract_retry_after_seconds(exc: Exception) -> float | None:
+    direct = getattr(exc, "retry_after", None)
+    if isinstance(direct, (int, float)) and not isinstance(direct, bool):
+        numeric = float(direct)
+        if math.isfinite(numeric) and numeric >= 0.0:
+            return numeric
+    headers_candidates = (
+        getattr(getattr(exc, "response", None), "headers", None),
+        getattr(exc, "headers", None),
+    )
+    for headers in headers_candidates:
+        if isinstance(headers, Mapping):
+            for key, value in headers.items():
+                if str(key).strip().casefold() == "retry-after":
+                    try:
+                        parsed = float(str(value).strip())
+                    except ValueError:
+                        return None
+                    if math.isfinite(parsed) and parsed >= 0.0:
+                        return parsed
+                    return None
+    return None
+
+
+def _is_429_error(exc: Exception) -> bool:
+    if _extract_http_status(exc) == 429:
+        return True
+    msg = str(exc).casefold()
+    return any(marker in msg for marker in ("429", "rate limit", "resource_exhausted"))
+
+
 def _is_transient_llm_error(exc: Exception) -> bool:
+    if type(exc).__name__ == "BudgetExhaustedError":
+        return False
+    status = _extract_http_status(exc)
+    if isinstance(exc, (genai_errors.APIError, httpx.HTTPStatusError)) and status is not None:
+        return status in _TRANSIENT_HTTP_CODES
     if isinstance(exc, (TimeoutError, httpx.TimeoutException, httpx.HTTPError)):
         return True
     if isinstance(exc, genai_errors.APIError):
@@ -121,6 +171,10 @@ class IntentExtractor:
         max_retries: int = 2,
         base_backoff_seconds: float = 0.5,
         max_backoff_seconds: float = 4.0,
+        jitter_ratio: float = 0.0,
+        random_fn: Callable[[], float] = random.random,
+        retry_on_429: bool = True,
+        on_retry: Callable[[int, float, int | None, float | None], None] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         logger: Optional[logging.Logger] = None,
     ):
@@ -132,6 +186,10 @@ class IntentExtractor:
         self.max_backoff_seconds = _validate_non_negative_finite(max_backoff_seconds, "max_backoff_seconds")
         if self.max_backoff_seconds < self.base_backoff_seconds:
             raise ValueError("max_backoff_seconds deve ser maior ou igual a base_backoff_seconds.")
+        self.jitter_ratio = _validate_non_negative_finite(jitter_ratio, "jitter_ratio")
+        self._random_fn = random_fn
+        self.retry_on_429 = bool(retry_on_429)
+        self._on_retry = on_retry
         self._sleep = sleep
         self._logger = logger
 
@@ -194,7 +252,10 @@ class IntentExtractor:
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",
             response_schema=UserIntent,
-            http_options=types.HttpOptions(timeout=timeout_ms),
+            http_options=types.HttpOptions(
+                timeout=timeout_ms,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
         )
 
         response = self._generate_with_retry(contents=contents, config=config, request_id=request_id)
@@ -233,11 +294,21 @@ class IntentExtractor:
                 safe_detail = sanitize_text(str(exc)) or type(exc).__name__
 
                 if _is_transient_llm_error(exc):
-                    if retry_attempt < self.max_retries:
-                        delay = min(
+                    http_status = _extract_http_status(exc)
+                    retry_after = _extract_retry_after_seconds(exc)
+                    allow_retry = self.retry_on_429 or not _is_429_error(exc)
+                    if allow_retry and retry_attempt < self.max_retries:
+                        base_delay = min(
                             self.max_backoff_seconds,
                             self.base_backoff_seconds * (2**retry_attempt),
                         )
+                        if self.jitter_ratio > 0.0:
+                            unit = max(0.0, min(1.0, float(self._random_fn())))
+                            delay = base_delay + (base_delay * self.jitter_ratio * unit)
+                        else:
+                            delay = base_delay
+                        if retry_after is not None and retry_after > delay:
+                            delay = min(retry_after, self.max_backoff_seconds)
                         retry_attempt += 1
                         self._log_event(
                             logging.WARNING,
@@ -247,6 +318,8 @@ class IntentExtractor:
                             retry_attempt=retry_attempt,
                             error_type="LLMUnavailableError",
                         )
+                        if self._on_retry is not None:
+                            self._on_retry(retry_attempt, delay, http_status, retry_after)
                         self._sleep(delay)
                         continue
 

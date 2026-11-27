@@ -924,6 +924,7 @@ def _invoke_extractor(
         return extractor.extract(user_text)
 
     kwargs: dict[str, object] = {}
+    params: Mapping[str, inspect.Parameter]
     try:
         sig = inspect.signature(extractor.extract)
         params = sig.parameters

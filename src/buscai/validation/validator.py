@@ -355,14 +355,15 @@ def _evaluate_feature_criterion(
             )
 
     # 6. Conectividade / ANC / Form factor / Painel
-    for conn_key, triggers in (
+    conn_rules: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("anc", ("anc", "cancelamento de ruido", "cancelamento ativo de ruido", "noise cancelling")),
         ("bluetooth", ("bluetooth",)),
         ("usb-c", ("usb-c", "usb c", "tipo c", "type-c")),
         ("5g", ("5g",)),
         ("nfc", ("nfc",)),
-    ):
-        if any(tr in norm for tr in triggers):
+    )
+    for conn_key, conn_triggers in conn_rules:
+        if any(tr in norm for tr in conn_triggers):
             ev = ev_map.evidences.get("connectivity_features")
             if ev is not None and conn_key in ev.value:
                 return _finish(True, ev_text=conn_key, src=ev.source_field)

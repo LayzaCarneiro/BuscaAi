@@ -36,6 +36,16 @@ _RAW_ALIASES = {
     "filmes": "entretenimento",
     "series": "entretenimento",
     "séries": "entretenimento",
+    "estetica gamer": "estetica gamer",
+    "estética gamer": "estetica gamer",
+    "estilo gamer": "estetica gamer",
+    "visual gamer": "estetica gamer",
+    "design gamer": "estetica gamer",
+    "aparencia gamer": "estetica gamer",
+    "aparência gamer": "estetica gamer",
+    "teclado gamer": "estetica gamer",
+    "mouse gamer": "estetica gamer",
+    "gamer": "estetica gamer",
 }
 
 
@@ -95,10 +105,163 @@ def token_jaccard(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+def _normalize_price_dict(exp: dict[str, Any]) -> dict[str, Any]:
+    min_price = exp.get("min_price")
+    max_price = exp.get("max_price")
+    if min_price is None and max_price is None:
+        return {
+            "min_price": None,
+            "max_price": None,
+            "min_inclusive": True,
+            "max_inclusive": True,
+            "is_hard_constraint": False,
+        }
+    return {
+        "min_price": min_price,
+        "max_price": max_price,
+        "min_inclusive": exp.get("min_inclusive", True),
+        "max_inclusive": exp.get("max_inclusive", True),
+        "is_hard_constraint": exp.get("is_hard_constraint", False),
+    }
+
+
 def price_match(pred: UserIntent, exp: dict[str, Any]) -> bool:
     p = pred.price
-    keys = ["min_price", "max_price", "min_inclusive", "max_inclusive", "is_hard_constraint"]
-    return all(getattr(p, key) == exp.get(key) for key in keys)
+    pred_norm: dict[str, Any]
+    if p.min_price is None and p.max_price is None:
+        pred_norm = {
+            "min_price": None,
+            "max_price": None,
+            "min_inclusive": True,
+            "max_inclusive": True,
+            "is_hard_constraint": False,
+        }
+    else:
+        pred_norm = {
+            "min_price": p.min_price,
+            "max_price": p.max_price,
+            "min_inclusive": p.min_inclusive,
+            "max_inclusive": p.max_inclusive,
+            "is_hard_constraint": p.is_hard_constraint,
+        }
+    exp_norm = _normalize_price_dict(exp)
+    return pred_norm == exp_norm
+
+
+def _set_divergence_category(pred_vals: list[str], exp_vals: list[str]) -> str:
+    p = normalize_set(pred_vals)
+    e = normalize_set(exp_vals)
+    missing = e - p
+    extra = p - e
+    if missing and not extra:
+        return "missing_expected_items"
+    if extra and not missing:
+        return "extra_unexpected_items"
+    return "set_mismatch"
+
+
+def _price_divergence_category(pred: UserIntent, exp: dict[str, Any]) -> str:
+    p = pred.price
+    exp_norm = _normalize_price_dict(exp)
+    if (p.min_price, p.max_price) != (exp_norm["min_price"], exp_norm["max_price"]):
+        return "price_bounds_mismatch"
+    if p.is_hard_constraint != exp_norm["is_hard_constraint"]:
+        return "price_hardness_mismatch"
+    return "price_inclusivity_mismatch"
+
+
+def compute_failed_fields(
+    result: CaseResult,
+    pred: UserIntent,
+    expected: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Retorna apenas nomes de campos e categorias de divergência sem expor texto bruto."""
+    failures: list[dict[str, str]] = []
+    if not result.category_correct:
+        failures.append({"field": "category", "category": "category_mismatch"})
+    if not result.price_correct:
+        failures.append(
+            {
+                "field": "price_constraint",
+                "category": _price_divergence_category(pred, expected.get("price", {})),
+            }
+        )
+    if result.brands_f1 < 0.99:
+        failures.append(
+            {
+                "field": "brands",
+                "category": _set_divergence_category(pred.brands, expected.get("brands", [])),
+            }
+        )
+    if result.excluded_brands_f1 < 0.99:
+        failures.append(
+            {
+                "field": "excluded_brands",
+                "category": _set_divergence_category(
+                    pred.excluded_brands, expected.get("excluded_brands", [])
+                ),
+            }
+        )
+    if result.use_cases_f1 < 0.75:
+        failures.append(
+            {
+                "field": "use_cases",
+                "category": _set_divergence_category(pred.use_cases, expected.get("use_cases", [])),
+            }
+        )
+    if result.required_features_f1 < 0.75:
+        failures.append(
+            {
+                "field": "required_features",
+                "category": _set_divergence_category(
+                    pred.required_features, expected.get("required_features", [])
+                ),
+            }
+        )
+    if result.excluded_features_f1 < 0.75:
+        failures.append(
+            {
+                "field": "excluded_features",
+                "category": _set_divergence_category(
+                    pred.excluded_features, expected.get("excluded_features", [])
+                ),
+            }
+        )
+    if not result.clarification_correct:
+        failures.append({"field": "clarification_required", "category": "clarification_flag_mismatch"})
+    if not result.clarification_question_ok:
+        failures.append(
+            {"field": "clarification_question", "category": "clarification_question_mismatch"}
+        )
+    return failures
+
+
+def compute_informational_divergences(
+    result: CaseResult,
+    pred: UserIntent,
+    expected: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Registra divergências não-core (ex.: preferred_features e profile_context)."""
+    divergences: list[dict[str, str]] = []
+    if result.preferred_features_f1 < 1.0:
+        divergences.append(
+            {
+                "field": "preferred_features",
+                "category": _set_divergence_category(
+                    pred.preferred_features, expected.get("preferred_features", [])
+                ),
+            }
+        )
+    if result.profile_f1 < 1.0:
+        divergences.append(
+            {
+                "field": "profile_context",
+                "category": _set_divergence_category(
+                    pred.profile_context, expected.get("profile_context", [])
+                ),
+            }
+        )
+    return divergences
 
 
 @dataclass
@@ -123,7 +286,9 @@ class CaseResult:
 
 
 def evaluate_case(pred: UserIntent, expected: dict[str, Any], case_id: int) -> CaseResult:
-    category_correct = safe_equal(pred.category or "", expected.get("category") or "")
+    category_correct = normalize_label(pred.category or "") == normalize_label(
+        expected.get("category") or ""
+    )
     price_correct_flag = price_match(pred, expected.get("price", {}))
     brands_f1 = set_f1(pred.brands, expected.get("brands", []))
     excluded_brands_f1 = set_f1(pred.excluded_brands, expected.get("excluded_brands", []))

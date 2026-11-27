@@ -22,7 +22,7 @@ from buscai.orchestration.routing import (
     route_after_semantics,
     route_after_validation,
 )
-from buscai.orchestration.state import ExecutionStatus, OrchestrationError, SearchGraphState
+from buscai.orchestration.state import ExecutionStatus, OrchestrationError
 from buscai.pricing import CurrencyConverter, FixedEnvExchangeRateProvider
 from buscai.ranking.pipeline import RankingPipeline
 from buscai.search.models import Candidate, SearchQuery, SearchResponse

@@ -7,7 +7,6 @@ import io
 import json
 import sys
 import tempfile
-from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 
 import httpx
-import pytest
 
 from buscai.search import EbayLiveBackend, EbayOAuthClient, QuotaGuard
 from buscai.search.models import Candidate

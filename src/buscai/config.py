@@ -55,6 +55,18 @@ def _parse_float_env(environ: Mapping[str, str], key: str, default: float) -> fl
     return val
 
 
+def _parse_bool_env(environ: Mapping[str, str], key: str, default: bool) -> bool:
+    raw = _clean_env_value(environ, key)
+    if raw is None:
+        return default
+    normalized = raw.casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{key} deve ser um booleano válido (true/false/1/0).")
+
+
 def _parse_api_keys(environ: Mapping[str, str], key: str = "BUSCAAI_API_KEYS") -> tuple[SecretStr, ...]:
     raw = _clean_env_value(environ, key)
     if raw is None:
@@ -83,6 +95,13 @@ class Settings(BaseModel):
     dedup_similar_threshold: float = Field(default=0.68, ge=0.0, le=1.0)
     api_keys: tuple[SecretStr, ...] = ()
     rate_limit_per_minute: int = Field(default=30, ge=1)
+    rate_limit_window_seconds: int = Field(default=60, ge=1)
+    search_default_limit: int = Field(default=10, ge=1, le=50)
+    search_max_limit: int = Field(default=20, ge=1, le=50)
+    chat_max_history_messages: int = Field(default=12, ge=0, le=50)
+    chat_max_message_chars: int = Field(default=500, ge=50, le=2000)
+    chat_max_history_total_chars: int = Field(default=4000, ge=100, le=20000)
+    embedding_preload: bool = False
     log_level: str = "INFO"
 
     @field_validator("gemini_model", "usd_brl_rate_updated_at", "usd_brl_rate_source", "embedding_model_name")
@@ -123,6 +142,10 @@ class Settings(BaseModel):
             raise ValueError(
                 "dedup_similar_threshold deve ser menor ou igual a dedup_probable_threshold."
             )
+        if self.search_default_limit > self.search_max_limit:
+            raise ValueError("search_default_limit deve ser menor ou igual a search_max_limit.")
+        if self.chat_max_message_chars > self.chat_max_history_total_chars:
+            raise ValueError("chat_max_message_chars deve ser menor ou igual a chat_max_history_total_chars.")
         return self
 
     @field_validator("ebay_marketplace_id")
@@ -178,6 +201,13 @@ class Settings(BaseModel):
             "embedding_backend": self.embedding_backend,
             "api_auth_configured": self.is_api_auth_configured,
             "rate_limit_per_minute": self.rate_limit_per_minute,
+            "rate_limit_window_seconds": self.rate_limit_window_seconds,
+            "search_default_limit": self.search_default_limit,
+            "search_max_limit": self.search_max_limit,
+            "chat_max_history_messages": self.chat_max_history_messages,
+            "chat_max_message_chars": self.chat_max_message_chars,
+            "chat_max_history_total_chars": self.chat_max_history_total_chars,
+            "embedding_preload": self.embedding_preload,
             "log_level": self.log_level,
         }
 
@@ -215,5 +245,12 @@ def load_settings(
         dedup_similar_threshold=_parse_float_env(env, "BUSCAAI_DEDUP_SIMILAR_THRESHOLD", 0.68),
         api_keys=_parse_api_keys(env, "BUSCAAI_API_KEYS"),
         rate_limit_per_minute=_parse_int_env(env, "BUSCAAI_RATE_LIMIT_PER_MINUTE", 30),
+        rate_limit_window_seconds=_parse_int_env(env, "BUSCAAI_RATE_LIMIT_WINDOW_SECONDS", 60),
+        search_default_limit=_parse_int_env(env, "BUSCAAI_SEARCH_DEFAULT_LIMIT", 10),
+        search_max_limit=_parse_int_env(env, "BUSCAAI_SEARCH_MAX_LIMIT", 20),
+        chat_max_history_messages=_parse_int_env(env, "BUSCAAI_CHAT_MAX_HISTORY_MESSAGES", 12),
+        chat_max_message_chars=_parse_int_env(env, "BUSCAAI_CHAT_MAX_MESSAGE_CHARS", 500),
+        chat_max_history_total_chars=_parse_int_env(env, "BUSCAAI_CHAT_MAX_HISTORY_TOTAL_CHARS", 4000),
+        embedding_preload=_parse_bool_env(env, "BUSCAAI_EMBEDDING_PRELOAD", False),
         log_level=_clean_env_value(env, "BUSCAAI_LOG_LEVEL") or "INFO",
     )
