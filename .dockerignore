@@ -1,0 +1,44 @@
+# Controle de versão, ambientes privados e caches locais
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+!.env.production.example
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.pyo
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+.coverage.*
+htmlcov
+.tmp_*
+*.log
+
+# Pesos e caches locais de ML (o E5 é pré-carregado durante o build da imagem)
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.gguf
+.huggingface
+
+# Arquivos fora do runtime de produção
+tests/
+postman/
+data/predictions_*.jsonl
+AUDITORIA.md
+RUNBOOK_OPERACIONAL.md
+src/buscai/app
+.vscode
+.idea
+.agents
+.agent
+graphify-out

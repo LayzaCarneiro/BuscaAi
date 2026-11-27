@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import ast
+import json
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
+from buscai.api import create_app
 from buscai.config import Settings, load_settings
+from buscai.semantic.embeddings import EmbeddingService, SentenceTransformerEmbeddingProvider
 
 
 def test_load_settings_uses_safe_defaults_when_env_is_empty() -> None:
@@ -130,3 +134,59 @@ def test_userintent_llm_does_not_call_load_dotenv_at_import_time() -> None:
                 raise AssertionError("userintent.llm não deve chamar load_dotenv() no nível de módulo.")
             if isinstance(func, ast.Attribute) and func.attr == "load_dotenv":
                 raise AssertionError("userintent.llm não deve chamar load_dotenv() no nível de módulo.")
+
+
+def test_settings_rejects_env_example_placeholders_for_gemini_ebay_and_api_keys() -> None:
+    placeholder_settings = load_settings(
+        environ={
+            "GEMINI_API_KEY": "coloque_sua_chave_aqui",
+            "EBAY_CLIENT_ID": "coloque_seu_client_id_aqui",
+            "EBAY_CLIENT_SECRET": "coloque_seu_client_secret_aqui",
+            "BUSCAAI_API_KEYS": "chave_cliente_1,changeme,<secret>",
+        }
+    )
+
+    assert placeholder_settings.is_gemini_configured is False
+    assert placeholder_settings.is_ebay_configured is False
+    assert placeholder_settings.is_api_auth_configured is False
+
+    app = create_app(settings=placeholder_settings, preload_embeddings=False)
+    with TestClient(app) as client:
+        health = client.get("/v1/health")
+    assert health.status_code == 503
+    body = health.json()
+    assert body["readiness"] == "not_ready"
+    components = {comp["name"]: comp for comp in body["components"]}
+    assert components["api_auth"]["status"] == "not_ready"
+    assert components["search_orchestrator"]["status"] == "not_ready"
+
+
+def test_settings_embedding_local_files_only_cache_dir_and_body_limit() -> None:
+    cache_path = "/srv/models/buscai_hf_cache"
+    settings = load_settings(
+        environ={
+            "BUSCAAI_EMBEDDING_LOCAL_FILES_ONLY": "true",
+            "BUSCAAI_EMBEDDING_CACHE_DIR": cache_path,
+            "BUSCAAI_MAX_REQUEST_BODY_BYTES": "16384",
+        }
+    )
+
+    assert settings.embedding_local_files_only is True
+    assert settings.embedding_cache_dir == cache_path
+    assert settings.max_request_body_bytes == 16384
+
+    summary = settings.safe_summary()
+    assert summary["embedding_local_files_only"] is True
+    assert summary["embedding_cache_dir_configured"] is True
+    assert summary["max_request_body_bytes"] == 16384
+    assert cache_path not in json.dumps(summary)
+
+    emb_service = EmbeddingService.from_settings(settings)
+    provider = emb_service._provider
+    assert isinstance(provider, SentenceTransformerEmbeddingProvider)
+    assert provider._local_files_only is True
+    assert provider._cache_folder == cache_path
+
+    for invalid_bytes in ("512", "1023", "2000000", "abc"):
+        with pytest.raises(ValueError):
+            load_settings(environ={"BUSCAAI_MAX_REQUEST_BODY_BYTES": invalid_bytes})

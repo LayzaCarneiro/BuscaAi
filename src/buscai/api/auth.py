@@ -12,58 +12,15 @@ from fastapi.security import APIKeyHeader
 from pydantic import SecretStr
 
 from buscai.api.errors import APIError
-from buscai.config import Settings
+from buscai.config import Settings, is_placeholder_secret
 
 API_KEY_HEADER_NAME = "X-API-Key"
 API_KEY_HEADER = APIKeyHeader(name=API_KEY_HEADER_NAME, auto_error=False)
 
-_PLACEHOLDER_EXACT: frozenset[str] = frozenset(
-    {
-        "changeme",
-        "replace_me",
-        "placeholder",
-        "your_api_key",
-        "your-api-key",
-        "api_key_here",
-        "example_key",
-        "sample_key",
-        "dummy_key",
-        "test_placeholder",
-        "todo",
-        "none",
-        "null",
-        "xxx",
-        "xxxx",
-        "chave_cliente",
-        "chave_cliente_1",
-        "chave_cliente_2",
-        "coloque_sua_chave_aqui",
-    }
-)
-_PLACEHOLDER_PREFIXES: tuple[str, ...] = (
-    "coloque_",
-    "insert_",
-    "replace_",
-    "placeholder",
-    "your_",
-    "example_",
-    "chave_cliente",
-)
-
 
 def is_placeholder_api_key(value: str) -> bool:
     """Identifica valores de exemplo/placeholder que nunca devem autenticar requisições."""
-    cleaned = value.strip()
-    if not cleaned:
-        return True
-    lowered = cleaned.casefold()
-    if lowered in _PLACEHOLDER_EXACT:
-        return True
-    if lowered.startswith(_PLACEHOLDER_PREFIXES):
-        return True
-    if ("<" in cleaned and ">" in cleaned) or ("{" in cleaned and "}" in cleaned):
-        return True
-    return False
+    return is_placeholder_secret(value)
 
 
 class APIKeyAuthenticator:

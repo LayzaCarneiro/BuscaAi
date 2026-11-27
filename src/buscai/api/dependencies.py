@@ -58,6 +58,19 @@ def _try_preload_embeddings(
         return type(exc).__name__
 
 
+class _EmbeddingUnloadCloser:
+    """Wrapper para liberar pesos de embeddings gerenciados pelo contêiner no encerramento."""
+
+    def __init__(self, embedding_service: EmbeddingService) -> None:
+        self._embedding_service = embedding_service
+
+    def close(self) -> None:
+        provider = getattr(self._embedding_service, "_provider", None)
+        unload_fn = getattr(provider, "unload", None)
+        if callable(unload_fn):
+            unload_fn()
+
+
 def _extract_embedding_service(orchestrator: SearchOrchestrator | None) -> EmbeddingService | None:
     if orchestrator is None:
         return None
@@ -217,10 +230,13 @@ def build_default_container(
             if issue is not None:
                 startup_issues.append(f"embeddings:{issue}")
     else:
+        created_own_embeddings = embedding_service is None
         active_emb = embedding_service or EmbeddingService.from_settings(
             active_settings,
             logger=active_logger,
         )
+        if created_own_embeddings:
+            owned_closables.append(_EmbeddingUnloadCloser(active_emb))
         if should_preload and not active_emb.is_ready():
             issue = _try_preload_embeddings(active_emb, active_logger)
             if issue is not None:

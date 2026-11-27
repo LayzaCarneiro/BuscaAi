@@ -1,4 +1,4 @@
-"""Testes integrados da Etapa 3 com mocks (PT-BR -> IntentExtractor -> QueryBuilder -> EbayLiveBackend)."""
+"""Testes integrados com mocks do planejamento de busca (PT-BR -> IntentExtractor -> QueryBuilder -> EbayLiveBackend)."""
 
 from __future__ import annotations
 

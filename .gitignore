@@ -4,10 +4,11 @@
 /task.md
 /implementado.md
 
-# Configuração privada; manter o modelo público
+# Configuração privada; manter os modelos públicos
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Ambientes e artefatos Python
 .venv/
@@ -30,8 +31,18 @@ htmlcov/
 .ruff_cache/
 .tox/
 
-# Saídas locais da avaliação Gemini
+# Saídas locais temporárias e métricas de validação
+.tmp_*
 /data/predictions_*.jsonl
+
+# Pesos de modelos e caches locais de ML (nunca versionar)
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.gguf
+.huggingface/
 
 # Arquivos pessoais de editores e logs
 .vscode/

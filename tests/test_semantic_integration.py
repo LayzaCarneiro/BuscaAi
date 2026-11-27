@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -20,8 +21,11 @@ from buscai.semantic import (
     SemanticSearchProcessor,
     merge_search_responses,
 )
+from scripts.benchmark_embeddings import evaluate_model as benchmark_evaluate_model
 from scripts.benchmark_embeddings import main as benchmark_main
 from userintent import IntentExtractor
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _StubModels:
@@ -189,3 +193,64 @@ def test_benchmark_embeddings_script_runs_offline_and_prints_only_aggregates(cap
         assert row["mrr"] == 1.0
     assert "ThinkPad" not in out
     assert "iPhone" not in out
+
+
+def test_semantic_v2_dataset_integrity_coverage_and_split_separation() -> None:
+    cal_path = ROOT / "data" / "eval_semantic_v2_calibration.jsonl"
+    eval_path = ROOT / "data" / "eval_semantic_v2_evaluation.jsonl"
+    assert cal_path.exists()
+    assert eval_path.exists()
+
+    cal_rows = [json.loads(line) for line in cal_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    eval_rows = [json.loads(line) for line in eval_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    assert all(row["synthetic"] is True and row["split"] == "calibration" for row in cal_rows)
+    assert all(row["synthetic"] is True and row["split"] == "evaluation" for row in eval_rows)
+
+    cal_ret = [r for r in cal_rows if r["task"] == "retrieval"]
+    eval_ret = [r for r in eval_rows if r["task"] == "retrieval"]
+    cal_ded = [r for r in cal_rows if r["task"] == "deduplication"]
+    eval_ded = [r for r in eval_rows if r["task"] == "deduplication"]
+
+    assert len(cal_ret) + len(eval_ret) >= 30
+    assert len(cal_ded) + len(eval_ded) >= 100
+
+    assert {r["query_pt"].casefold() for r in cal_ret}.isdisjoint({r["query_pt"].casefold() for r in eval_ret})
+    cal_pairs = {(r["left"]["title"].casefold(), r["right"]["title"].casefold()) for r in cal_ded}
+    eval_pairs = {(r["left"]["title"].casefold(), r["right"]["title"].casefold()) for r in eval_ded}
+    assert cal_pairs.isdisjoint(eval_pairs)
+
+    all_rows = cal_rows + eval_rows
+    raw_text = cal_path.read_text(encoding="utf-8") + eval_path.read_text(encoding="utf-8")
+    assert "ebay.com/itm" not in raw_text.casefold()
+    assert "v1|" not in raw_text
+
+    all_langs = {lang for r in all_rows for lang in r["languages"]}
+    assert {"pt-BR", "en-US"}.issubset(all_langs)
+
+    all_dedup = cal_ded + eval_ded
+    labels = {r["expected_label"] for r in all_dedup}
+    assert {"probable_duplicate", "similar_product", "different_product"} == labels
+
+    tags = " ".join(r["case_tag"] for r in all_dedup)
+    for required_variant in ("mini", "plus", "pro", "max", "ultra", "se", "fe"):
+        assert f"variant_{required_variant}" in tags
+
+    conditions_seen = {
+        side.get("condition")
+        for r in all_dedup
+        for side in (r["left"], r["right"])
+        if side.get("condition") is not None
+    }
+    assert {"New", "Used", "Refurbished", "Open Box"}.issubset(conditions_seen)
+    assert any("diff_ram" in r["case_tag"] for r in all_dedup)
+    assert any("diff_storage" in r["case_tag"] for r in all_dedup)
+    assert any("incompat_" in r["case_tag"] for r in all_dedup)
+    assert any("incomplete_info" in r["case_tag"] for r in all_dedup)
+    assert any("same_brand_diff_model" in r["case_tag"] for r in all_dedup)
+    assert any("equiv_" in r["case_tag"] for r in all_dedup)
+
+    cal_summary = benchmark_evaluate_model(cal_rows, backend="stub", model_name="intfloat/multilingual-e5-small")
+    eval_summary = benchmark_evaluate_model(eval_rows, backend="stub", model_name="intfloat/multilingual-e5-small")
+    assert cal_summary["retrieval_cases"] == len(cal_ret)
+    assert eval_summary["dedup_cases"] == len(eval_ded)
