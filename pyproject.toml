@@ -16,7 +16,6 @@ dependencies = [
     "numpy>=2,<3",
     "pydantic>=2.10,<3",
     "python-dotenv>=1.0,<2",
-    "tenacity>=9,<10",
     "uvicorn>=0.34,<1",
 ]
 
@@ -41,12 +40,16 @@ ui = [
 where = ["src"]
 include = ["buscai*", "userintent*"]
 
+[tool.setuptools.package-data]
+buscai = ["catalog_profiles.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
 markers = [
     "ebay_live: testes opt-in que chamam a API real de produção da eBay (consomem cota)",
     "gemini_live: testes opt-in que chamam a API real do Google Gemini (consomem cota)",
+    "semantic_real: testes de integração com o modelo real intfloat/multilingual-e5-small (sem chamadas Gemini/eBay)",
 ]
 
 [tool.ruff]

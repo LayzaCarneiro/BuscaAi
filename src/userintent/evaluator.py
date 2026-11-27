@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, asdict
 from typing import Any
 
@@ -36,6 +37,19 @@ _RAW_ALIASES = {
     "filmes": "entretenimento",
     "series": "entretenimento",
     "séries": "entretenimento",
+    "filmes e series": "entretenimento",
+    "filmes e séries": "entretenimento",
+    "series e filmes": "entretenimento",
+    "séries e filmes": "entretenimento",
+    "assistir filmes": "entretenimento",
+    "assistir series": "entretenimento",
+    "assistir séries": "entretenimento",
+    "assistir filmes e series": "entretenimento",
+    "assistir filmes e séries": "entretenimento",
+    "assistir videos": "entretenimento",
+    "assistir vídeos": "entretenimento",
+    "videos": "entretenimento",
+    "vídeos": "entretenimento",
     "estetica gamer": "estetica gamer",
     "estética gamer": "estetica gamer",
     "estilo gamer": "estetica gamer",
@@ -72,13 +86,51 @@ def normalize_set(values: list[str]) -> set[str]:
     return {normalize_label(v) for v in values if v and v.strip()}
 
 
-def safe_equal(a: Any, b: Any) -> bool:
-    return normalize_text(str(a)) == normalize_text(str(b))
+_NEGATIVE_TECH_PREFIX_RE = re.compile(r"\b(?:menos de|abaixo de|maximo|ate|sem|nao)\b")
+_UNIT_SPACE_RE = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*(gb|tb|mb|hz|mah|polegadas)\b")
+_RAM_CAP_RE = re.compile(r"\b(\d+(?:[.,]\d+)?\s*(?:gb|tb|mb))\b.*\bram\b|\bram\b.*\b(\d+(?:[.,]\d+)?\s*(?:gb|tb|mb))\b")
+_SSD_CAP_RE = re.compile(r"\b(\d+(?:[.,]\d+)?\s*(?:gb|tb))\b.*\bssd\b|\bssd\b.*\b(\d+(?:[.,]\d+)?\s*(?:gb|tb))\b")
+_MIN_PREFIX_CAP_RE = re.compile(
+    r"^(?:pelo menos|no minimo|minimo de|minimo|>=)\s+(\d+(?:[.,]\d+)?\s*(?:gb|tb))$",
+)
 
 
-def set_f1(pred: list[str], expected: list[str]) -> float:
-    p = normalize_set(pred)
-    e = normalize_set(expected)
+def normalize_feature_tokens(value: str) -> set[str]:
+    """Normaliza features técnicas e exclusões compostas sem perder valores ou exclusões distintas."""
+    norm = normalize_label(value)
+    if not norm:
+        return set()
+
+    if re.search(r"\brgb\b", norm) and re.search(r"\bgamer\b", norm) and "cadeira gamer" not in norm:
+        return {"rgb", "estetica gamer"}
+
+    spaced = _UNIT_SPACE_RE.sub(r"\1 \2", norm)
+    if not _NEGATIVE_TECH_PREFIX_RE.search(spaced):
+        ram_match = _RAM_CAP_RE.search(spaced)
+        if ram_match:
+            cap = ram_match.group(1) or ram_match.group(2)
+            return {f"ram {cap}"}
+        ssd_match = _SSD_CAP_RE.search(spaced)
+        if ssd_match:
+            cap = ssd_match.group(1) or ssd_match.group(2)
+            prefix = "ssd nvme" if re.search(r"\bnvme\b", spaced) else "ssd"
+            return {f"{prefix} {cap}"}
+        min_cap_match = _MIN_PREFIX_CAP_RE.match(spaced)
+        if min_cap_match:
+            return {min_cap_match.group(1)}
+
+    return {spaced}
+
+
+def normalize_feature_set(values: list[str]) -> set[str]:
+    tokens: set[str] = set()
+    for v in values:
+        if v and v.strip():
+            tokens.update(normalize_feature_tokens(v))
+    return tokens
+
+
+def _f1_from_sets(p: set[str], e: set[str]) -> float:
     if not p and not e:
         return 1.0
     if not p or not e:
@@ -89,6 +141,18 @@ def set_f1(pred: list[str], expected: list[str]) -> float:
     if precision + recall == 0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
+
+
+def safe_equal(a: Any, b: Any) -> bool:
+    return normalize_text(str(a)) == normalize_text(str(b))
+
+
+def set_f1(pred: list[str], expected: list[str]) -> float:
+    return _f1_from_sets(normalize_set(pred), normalize_set(expected))
+
+
+def feature_set_f1(pred: list[str], expected: list[str]) -> float:
+    return _f1_from_sets(normalize_feature_set(pred), normalize_feature_set(expected))
 
 
 def token_jaccard(a: str, b: str) -> float:
@@ -148,9 +212,14 @@ def price_match(pred: UserIntent, exp: dict[str, Any]) -> bool:
     return pred_norm == exp_norm
 
 
-def _set_divergence_category(pred_vals: list[str], exp_vals: list[str]) -> str:
-    p = normalize_set(pred_vals)
-    e = normalize_set(exp_vals)
+def _set_divergence_category(
+    pred_vals: list[str],
+    exp_vals: list[str],
+    *,
+    normalizer: Callable[[list[str]], set[str]] = normalize_set,
+) -> str:
+    p = normalizer(pred_vals)
+    e = normalizer(exp_vals)
     missing = e - p
     extra = p - e
     if missing and not extra:
@@ -214,7 +283,9 @@ def compute_failed_fields(
             {
                 "field": "required_features",
                 "category": _set_divergence_category(
-                    pred.required_features, expected.get("required_features", [])
+                    pred.required_features,
+                    expected.get("required_features", []),
+                    normalizer=normalize_feature_set,
                 ),
             }
         )
@@ -223,7 +294,9 @@ def compute_failed_fields(
             {
                 "field": "excluded_features",
                 "category": _set_divergence_category(
-                    pred.excluded_features, expected.get("excluded_features", [])
+                    pred.excluded_features,
+                    expected.get("excluded_features", []),
+                    normalizer=normalize_feature_set,
                 ),
             }
         )
@@ -248,7 +321,9 @@ def compute_informational_divergences(
             {
                 "field": "preferred_features",
                 "category": _set_divergence_category(
-                    pred.preferred_features, expected.get("preferred_features", [])
+                    pred.preferred_features,
+                    expected.get("preferred_features", []),
+                    normalizer=normalize_feature_set,
                 ),
             }
         )
@@ -294,9 +369,9 @@ def evaluate_case(pred: UserIntent, expected: dict[str, Any], case_id: int) -> C
     excluded_brands_f1 = set_f1(pred.excluded_brands, expected.get("excluded_brands", []))
     use_cases_f1 = set_f1(pred.use_cases, expected.get("use_cases", []))
     profile_f1 = set_f1(pred.profile_context, expected.get("profile_context", []))
-    required_features_f1 = set_f1(pred.required_features, expected.get("required_features", []))
-    preferred_features_f1 = set_f1(pred.preferred_features, expected.get("preferred_features", []))
-    excluded_features_f1 = set_f1(pred.excluded_features, expected.get("excluded_features", []))
+    required_features_f1 = feature_set_f1(pred.required_features, expected.get("required_features", []))
+    preferred_features_f1 = feature_set_f1(pred.preferred_features, expected.get("preferred_features", []))
+    excluded_features_f1 = feature_set_f1(pred.excluded_features, expected.get("excluded_features", []))
     clarification_expected = expected.get("clarification_needed", False)
     clarification_correct = pred.clarification_needed == clarification_expected
     question = (pred.clarification_question or "").strip()

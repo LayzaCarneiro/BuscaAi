@@ -13,6 +13,56 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 VALID_EMBEDDING_BACKENDS = frozenset({"sentence_transformers", "fastembed"})
 
+_PLACEHOLDER_EXACT: frozenset[str] = frozenset(
+    {
+        "changeme",
+        "replace_me",
+        "placeholder",
+        "your_api_key",
+        "your-api-key",
+        "api_key_here",
+        "example_key",
+        "sample_key",
+        "dummy_key",
+        "test_placeholder",
+        "todo",
+        "none",
+        "null",
+        "xxx",
+        "xxxx",
+        "chave_cliente",
+        "chave_cliente_1",
+        "chave_cliente_2",
+        "coloque_sua_chave_aqui",
+        "coloque_seu_client_id_aqui",
+        "coloque_seu_client_secret_aqui",
+    }
+)
+_PLACEHOLDER_PREFIXES: tuple[str, ...] = (
+    "coloque_",
+    "insert_",
+    "replace_",
+    "placeholder",
+    "your_",
+    "example_",
+    "chave_cliente",
+)
+
+
+def is_placeholder_secret(value: str) -> bool:
+    """Identifica valores de exemplo/placeholder que não devem ser tratados como credenciais reais."""
+    cleaned = value.strip()
+    if not cleaned:
+        return True
+    lowered = cleaned.casefold()
+    if lowered in _PLACEHOLDER_EXACT:
+        return True
+    if lowered.startswith(_PLACEHOLDER_PREFIXES):
+        return True
+    if ("<" in cleaned and ">" in cleaned) or ("{" in cleaned and "}" in cleaned):
+        return True
+    return False
+
 
 def _clean_env_value(environ: Mapping[str, str], key: str) -> str | None:
     raw = environ.get(key)
@@ -91,11 +141,14 @@ class Settings(BaseModel):
     embedding_model_name: str = "intfloat/multilingual-e5-small"
     embedding_backend: str = "sentence_transformers"
     embedding_batch_size: int = Field(default=32, ge=1, le=256)
+    embedding_local_files_only: bool = False
+    embedding_cache_dir: str | None = None
     dedup_probable_threshold: float = Field(default=0.86, ge=0.0, le=1.0)
     dedup_similar_threshold: float = Field(default=0.68, ge=0.0, le=1.0)
     api_keys: tuple[SecretStr, ...] = ()
     rate_limit_per_minute: int = Field(default=30, ge=1)
     rate_limit_window_seconds: int = Field(default=60, ge=1)
+    max_request_body_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
     search_default_limit: int = Field(default=10, ge=1, le=50)
     search_max_limit: int = Field(default=20, ge=1, le=50)
     chat_max_history_messages: int = Field(default=12, ge=0, le=50)
@@ -173,19 +226,22 @@ class Settings(BaseModel):
 
     @property
     def is_gemini_configured(self) -> bool:
-        return self.gemini_api_key is not None and bool(self.gemini_api_key.get_secret_value().strip())
+        return self.gemini_api_key is not None and not is_placeholder_secret(
+            self.gemini_api_key.get_secret_value()
+        )
 
     @property
     def is_ebay_configured(self) -> bool:
         return (
-            bool(self.ebay_client_id and self.ebay_client_id.strip())
+            isinstance(self.ebay_client_id, str)
+            and not is_placeholder_secret(self.ebay_client_id)
             and self.ebay_client_secret is not None
-            and bool(self.ebay_client_secret.get_secret_value().strip())
+            and not is_placeholder_secret(self.ebay_client_secret.get_secret_value())
         )
 
     @property
     def is_api_auth_configured(self) -> bool:
-        return any(bool(key.get_secret_value().strip()) for key in self.api_keys)
+        return any(not is_placeholder_secret(key.get_secret_value()) for key in self.api_keys)
 
     def safe_summary(self) -> dict[str, object]:
         """Resumo operacional seguro para health check e logs (sem expor segredos)."""
@@ -199,9 +255,12 @@ class Settings(BaseModel):
             "usd_brl_rate_updated_at": self.usd_brl_rate_updated_at,
             "embedding_model_name": self.embedding_model_name,
             "embedding_backend": self.embedding_backend,
+            "embedding_local_files_only": self.embedding_local_files_only,
+            "embedding_cache_dir_configured": self.embedding_cache_dir is not None,
             "api_auth_configured": self.is_api_auth_configured,
             "rate_limit_per_minute": self.rate_limit_per_minute,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
+            "max_request_body_bytes": self.max_request_body_bytes,
             "search_default_limit": self.search_default_limit,
             "search_max_limit": self.search_max_limit,
             "chat_max_history_messages": self.chat_max_history_messages,
@@ -241,11 +300,14 @@ def load_settings(
         embedding_model_name=_clean_env_value(env, "BUSCAAI_EMBEDDING_MODEL") or "intfloat/multilingual-e5-small",
         embedding_backend=_clean_env_value(env, "BUSCAAI_EMBEDDING_BACKEND") or "sentence_transformers",
         embedding_batch_size=_parse_int_env(env, "BUSCAAI_EMBEDDING_BATCH_SIZE", 32),
+        embedding_local_files_only=_parse_bool_env(env, "BUSCAAI_EMBEDDING_LOCAL_FILES_ONLY", False),
+        embedding_cache_dir=_clean_env_value(env, "BUSCAAI_EMBEDDING_CACHE_DIR"),
         dedup_probable_threshold=_parse_float_env(env, "BUSCAAI_DEDUP_PROBABLE_THRESHOLD", 0.86),
         dedup_similar_threshold=_parse_float_env(env, "BUSCAAI_DEDUP_SIMILAR_THRESHOLD", 0.68),
         api_keys=_parse_api_keys(env, "BUSCAAI_API_KEYS"),
         rate_limit_per_minute=_parse_int_env(env, "BUSCAAI_RATE_LIMIT_PER_MINUTE", 30),
         rate_limit_window_seconds=_parse_int_env(env, "BUSCAAI_RATE_LIMIT_WINDOW_SECONDS", 60),
+        max_request_body_bytes=_parse_int_env(env, "BUSCAAI_MAX_REQUEST_BODY_BYTES", 65_536),
         search_default_limit=_parse_int_env(env, "BUSCAAI_SEARCH_DEFAULT_LIMIT", 10),
         search_max_limit=_parse_int_env(env, "BUSCAAI_SEARCH_MAX_LIMIT", 20),
         chat_max_history_messages=_parse_int_env(env, "BUSCAAI_CHAT_MAX_HISTORY_MESSAGES", 12),

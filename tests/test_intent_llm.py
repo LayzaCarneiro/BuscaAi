@@ -22,6 +22,7 @@ from userintent import (
     UserIntent,
     merge_explicit_budget,
 )
+from userintent.llm import reconcile_negation_and_waiver
 
 
 class _StubModels:
@@ -395,3 +396,283 @@ def test_a4_merge_explicit_budget_cross_currency_preserves_strictest_constraint(
     )
     with pytest.raises(ValueError, match="conversor cambial"):
         merge_explicit_budget(eur_intent, 5000, currency="BRL", currency_converter=converter)
+
+
+def _fake_api_error(
+    status_code: int,
+    *,
+    message: str = "api error",
+    retry_after: str | None = None,
+) -> genai_errors.APIError:
+    headers: dict[str, str] = {}
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    req = httpx.Request("POST", "https://generativelanguage.invalid/v1beta/models/test:generateContent")
+    resp = httpx.Response(
+        status_code,
+        request=req,
+        headers=headers,
+        json={"error": {"code": status_code, "message": message}},
+    )
+    return genai_errors.APIError(status_code, {"error": {"message": message}}, resp)
+
+
+def test_intent_extractor_uses_parsed_response_and_ignores_extra_fields() -> None:
+    fake_client = _StubClient(
+        lambda **_kwargs: SimpleNamespace(
+            parsed={
+                "category": "notebook",
+                "price": {"max_price": 5000, "is_hard_constraint": True, "extra_price_note": "ignored"},
+                "brands": ["Lenovo"],
+                "use_cases": ["programação", "estudos"],
+                "query": "notebook Lenovo",
+                "confidence": 0.99,
+            },
+            text=None,
+        )
+    )
+    extractor = IntentExtractor(model="gemini-3.5-flash-lite", client=fake_client)
+
+    intent = extractor.extract("Quero um notebook Lenovo até 5000")
+
+    assert isinstance(intent, UserIntent)
+    assert intent.category == "notebook"
+    assert intent.brands == ["Lenovo"]
+    assert "confidence" not in intent.model_dump()
+    assert "extra_price_note" not in intent.price.model_dump()
+    assert len(fake_client.models.calls) == 1
+    cfg = fake_client.models.calls[0]["config"]
+    assert getattr(cfg, "response_mime_type") == "application/json"
+    assert getattr(cfg, "response_schema") is UserIntent
+
+
+def test_intent_extractor_falls_back_to_json_text_and_ignores_extra_fields() -> None:
+    payload = json.dumps(
+        {
+            "category": "notebook",
+            "query": "notebook Lenovo",
+            "extra_llm_note": "should_be_ignored",
+        }
+    )
+    fake_client = _StubClient(lambda **_kwargs: SimpleNamespace(parsed=None, text=payload))
+    extractor = IntentExtractor(model="gemini-3.5-flash-lite", client=fake_client)
+
+    intent = extractor.extract("Quero um notebook Lenovo")
+
+    assert intent.category == "notebook"
+    assert intent.query == "notebook Lenovo"
+    assert "extra_llm_note" not in intent.model_dump()
+
+
+def test_intent_extractor_handles_empty_malformed_and_provider_errors() -> None:
+    empty_extractor = IntentExtractor(
+        model="gemini-3.5-flash-lite",
+        client=_StubClient(lambda **_kwargs: SimpleNamespace(parsed=None, text="")),
+    )
+    with pytest.raises(RuntimeError, match="não retornou conteúdo"):
+        empty_extractor.extract("notebook")
+
+    invalid_json_extractor = IntentExtractor(
+        model="gemini-3.5-flash-lite",
+        client=_StubClient(lambda **_kwargs: SimpleNamespace(parsed=None, text="{invalid")),
+    )
+    with pytest.raises(ValidationError):
+        invalid_json_extractor.extract("notebook")
+
+    def raise_unavailable(**_kwargs):
+        raise RuntimeError("503 Unavailable")
+
+    failing_extractor = IntentExtractor(
+        model="gemini-3.5-flash-lite",
+        client=_StubClient(raise_unavailable),
+    )
+    with pytest.raises(RuntimeError, match="503 Unavailable"):
+        failing_extractor.extract("notebook")
+
+
+def test_exponential_backoff_applies_deterministic_jitter_sdk_single_attempt_and_retry_on_429_false() -> None:
+    extractor_sleeps: list[float] = []
+    attempts = 0
+
+    def _flaky_handler(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise _fake_api_error(503, message="temporarily overloaded")
+        return SimpleNamespace(parsed=UserIntent(category="notebook", query="notebook"), text=None)
+
+    client = _StubClient(_flaky_handler)
+    extractor = IntentExtractor(
+        model="gemini-3.5-flash-lite",
+        client=client,  # type: ignore[arg-type]
+        max_retries=2,
+        base_backoff_seconds=1.0,
+        max_backoff_seconds=8.0,
+        jitter_ratio=0.5,
+        random_fn=lambda: 0.4,
+        sleep=extractor_sleeps.append,
+    )
+    res = extractor.extract("Quero um notebook", request_id="test-jitter")
+    assert res.category == "notebook"
+    assert extractor_sleeps == pytest.approx([1.2, 2.4])
+    cfg = client.models.calls[0]["config"]
+    assert getattr(cfg, "http_options").retry_options.attempts == 1
+
+    sleeps_429: list[float] = []
+    calls_429 = 0
+
+    def _always_429(**_kwargs):
+        nonlocal calls_429
+        calls_429 += 1
+        raise _fake_api_error(429, message="rate limit", retry_after="9")
+
+    extractor_429 = IntentExtractor(
+        model="gemini-3.5-flash-lite",
+        client=_StubClient(_always_429),  # type: ignore[arg-type]
+        max_retries=2,
+        retry_on_429=False,
+        sleep=sleeps_429.append,
+    )
+    with pytest.raises(LLMUnavailableError):
+        extractor_429.extract("Quero um notebook", request_id="test-429-no-retry")
+    assert calls_429 == 1
+    assert sleeps_429 == []
+
+
+def test_waiver_vs_explicit_exclusion_vs_preference_removal_reconciler() -> None:
+    raw_waiver = UserIntent(
+        category="notebook",
+        price=PriceConstraint(max_price=4000, is_hard_constraint=True, currency="BRL"),
+        brands=["Lenovo"],
+        use_cases=["estudos"],
+        required_features=["touchscreen", "16 GB de RAM"],
+        excluded_features=["touchscreen"],
+        query="notebook 16 GB RAM",
+    )
+    waived, changed_waiver = reconcile_negation_and_waiver(raw_waiver, "Na verdade, não precisa ter touchscreen.")
+    assert changed_waiver is True
+    assert waived.required_features == ["16 GB de RAM"]
+    assert waived.preferred_features == []
+    assert waived.excluded_features == []
+    assert waived.price.max_price == 4000
+    assert waived.price.is_hard_constraint is True
+    assert waived.brands == ["Lenovo"]
+    assert waived.use_cases == ["estudos"]
+
+    raw_excl = UserIntent(
+        category="notebook",
+        price=PriceConstraint(max_price=4000, is_hard_constraint=True, currency="BRL"),
+        required_features=["touchscreen", "SSD 512 GB"],
+        preferred_features=["touchscreen"],
+        excluded_features=[],
+        query="notebook SSD 512 GB",
+    )
+    excluded, changed_excl = reconcile_negation_and_waiver(raw_excl, "Não quero touchscreen.")
+    assert changed_excl is True
+    assert excluded.required_features == ["SSD 512 GB"]
+    assert excluded.preferred_features == []
+    assert excluded.excluded_features == ["touchscreen"]
+    assert excluded.price.max_price == 4000
+    assert excluded.price.is_hard_constraint is True
+
+    raw_pref = UserIntent(
+        category="notebook",
+        brands=["Lenovo"],
+        price=PriceConstraint(max_price=4000, is_hard_constraint=True, currency="BRL"),
+        preferred_features=["teclado retroiluminado", "leve"],
+        excluded_features=["teclado retroiluminado"],
+        query="notebook Lenovo leve",
+    )
+    pref_removed, changed_pref = reconcile_negation_and_waiver(
+        raw_pref,
+        "Não faço questão de teclado retroiluminado.",
+    )
+    assert changed_pref is True
+    assert pref_removed.preferred_features == ["leve"]
+    assert pref_removed.excluded_features == []
+    assert pref_removed.brands == ["Lenovo"]
+    assert pref_removed.price.max_price == 4000
+
+    m6_intent = UserIntent(
+        category="smartphone",
+        required_features=["pelo menos 256 GB"],
+        excluded_features=[],
+        query="smartphone 256 GB",
+    )
+    m6_out, changed_m6 = reconcile_negation_and_waiver(m6_intent, "Não quero um celular com menos de 256 GB.")
+    assert changed_m6 is False
+    assert m6_out.required_features == ["pelo menos 256 GB"]
+    assert m6_out.excluded_features == []
+
+
+def test_extractor_multiturn_reconciles_waiver_exclusion_and_pref_removal() -> None:
+    calls = 0
+
+    def _handler(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(
+                parsed=UserIntent(
+                    category="notebook",
+                    price=PriceConstraint(max_price=4000, is_hard_constraint=True, currency="BRL"),
+                    excluded_features=["touchscreen"],
+                    query="notebook",
+                ),
+                text=None,
+            )
+        if calls == 2:
+            return SimpleNamespace(
+                parsed=UserIntent(
+                    category="notebook",
+                    price=PriceConstraint(max_price=4000, is_hard_constraint=True, currency="BRL"),
+                    required_features=["touchscreen"],
+                    query="notebook",
+                ),
+                text=None,
+            )
+        return SimpleNamespace(
+            parsed=UserIntent(
+                category="notebook",
+                brands=["Lenovo"],
+                preferred_features=["teclado retroiluminado"],
+                excluded_features=["teclado retroiluminado"],
+                query="notebook Lenovo",
+            ),
+            text=None,
+        )
+
+    extractor = IntentExtractor(model="gemini-3.5-flash-lite", client=_StubClient(_handler))  # type: ignore[arg-type]
+
+    waived = extractor.extract(
+        "Na verdade, não precisa ter touchscreen.",
+        conversation_history=[
+            {"role": "user", "content": "Quero um notebook com touchscreen até R$ 4.000."},
+            {"role": "assistant", "content": "Busca realizada na categoria notebook até R$ 4000."},
+        ],
+    )
+    assert waived.required_features == []
+    assert waived.preferred_features == []
+    assert waived.excluded_features == []
+    assert waived.price.max_price == 4000
+
+    excluded = extractor.extract(
+        "Não quero touchscreen.",
+        conversation_history=[
+            {"role": "user", "content": "Quero um notebook com touchscreen até R$ 4.000."},
+            {"role": "assistant", "content": "Busca realizada."},
+        ],
+    )
+    assert excluded.required_features == []
+    assert excluded.excluded_features == ["touchscreen"]
+
+    pref_removed = extractor.extract(
+        "Não faço questão de teclado retroiluminado.",
+        conversation_history=[
+            {"role": "user", "content": "Quero um notebook Lenovo, de preferência com teclado retroiluminado."},
+            {"role": "assistant", "content": "Busca realizada."},
+        ],
+    )
+    assert pref_removed.preferred_features == []
+    assert pref_removed.excluded_features == []
+    assert pref_removed.brands == ["Lenovo"]

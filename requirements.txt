@@ -1,11 +1,12 @@
+# Dependências diretas de produção + embeddings reais (espelho de pyproject.toml[semantic]).
+# Para instalação reproduzível e auditável em produção, utilize:
+#   pip install --require-hashes --no-deps -r requirements.lock
 fastapi>=0.115,<1
 google-genai>=1.0,<2
 httpx>=0.28,<1
 langgraph>=1.2,<2
+numpy>=2,<3
 pydantic>=2.10,<3
 python-dotenv>=1.0,<2
-pytest>=8,<10
-streamlit>=1.40,<1.67
-tenacity>=9,<10
+sentence-transformers>=3,<6
 uvicorn>=0.34,<1
-

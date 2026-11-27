@@ -10,6 +10,7 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 
 from buscai.api import create_app
+from buscai.api.dependencies import build_default_container
 from buscai.config import load_settings
 from buscai.observability import configure_logging
 from buscai.orchestration import OrchestrationDependencies, SearchOrchestrator
@@ -229,3 +230,40 @@ def test_lifespan_shares_single_orchestrator_across_requests_and_preloads_stub_w
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert json.loads(r1.text)["request_id"] != json.loads(r2.text)["request_id"]
+
+
+def test_lifespan_shutdown_unloads_owned_embeddings_but_preserves_injected() -> None:
+    class _SpyProvider(DeterministicStubEmbeddingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.unload_calls = 0
+
+        def unload(self) -> None:
+            self.unload_calls += 1
+            super().unload()
+
+    injected_provider = _SpyProvider()
+    injected_service = EmbeddingService(injected_provider)
+    injected_service.embed_queries(["warmup"])
+    assert injected_service.is_ready() is True
+
+    settings = load_settings(environ={"BUSCAAI_API_KEYS": "buscai_valid_key_alpha_987"})
+    injected_container = build_default_container(
+        settings=settings,
+        embedding_service=injected_service,
+        preload_embeddings=False,
+    )
+    injected_container.close()
+    assert injected_provider.unload_calls == 0
+    assert injected_service.is_ready() is True
+
+    owned_container = build_default_container(
+        settings=settings,
+        preload_embeddings=False,
+    )
+    assert owned_container.embedding_service is not None
+    owned_provider = owned_container.embedding_service._provider
+    owned_provider._model = object()  # type: ignore[attr-defined]
+    assert owned_container.embedding_service.is_ready() is True
+    owned_container.close()
+    assert owned_container.embedding_service.is_ready() is False

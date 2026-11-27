@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -23,12 +24,26 @@ from buscai.pricing import CurrencyConverter
 from buscai.semantic.embeddings import EmbeddingService
 
 
-class RequestContextMiddleware:
-    """Middleware ASGI puro para X-Request-ID validado e logging operacional por allowlist."""
+DEFAULT_MAX_REQUEST_BODY_BYTES = 65_536
 
-    def __init__(self, app: ASGIApp, *, logger: logging.Logger) -> None:
+
+class _RequestBodyTooLargeError(Exception):
+    """Exceção interna para interromper leitura de corpo HTTP acima do limite configurado."""
+
+
+class RequestContextMiddleware:
+    """Middleware ASGI puro para X-Request-ID validado, limite de corpo HTTP, headers defensivos e logging."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        logger: logging.Logger,
+        max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES,
+    ) -> None:
         self._app = app
         self._logger = logger
+        self._max_body_bytes = max_body_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -44,21 +59,70 @@ class RequestContextMiddleware:
         path = str(scope.get("path", "/"))
         started = time.perf_counter()
         status_code = 500
+        response_started = False
 
         async def _send_wrapper(message: Message) -> None:
-            nonlocal status_code
+            nonlocal status_code, response_started
             if message["type"] == "http.response.start":
+                response_started = True
                 status_code = int(message.get("status", 500))
                 mutable_headers = MutableHeaders(scope=message)
                 mutable_headers["X-Request-ID"] = request_id
+                mutable_headers.setdefault("X-Content-Type-Options", "nosniff")
+                mutable_headers.setdefault("X-Frame-Options", "DENY")
+                mutable_headers.setdefault("Referrer-Policy", "no-referrer")
+                if path.startswith("/v1/"):
+                    mutable_headers.setdefault("Cache-Control", "no-store")
                 rate_headers = state.get("rate_limit_headers")
                 if isinstance(rate_headers, dict):
                     for key, val in rate_headers.items():
                         mutable_headers.setdefault(str(key), str(val))
             await send(message)
 
+        async def _send_payload_too_large() -> None:
+            state["error_type"] = "payload_too_large"
+            resp = JSONResponse(
+                status_code=413,
+                content={
+                    "error": {
+                        "code": "payload_too_large",
+                        "message": "Corpo da requisição excede o tamanho máximo permitido.",
+                        "request_id": request_id,
+                    }
+                },
+            )
+            await resp(scope, receive, _send_wrapper)
+
+        received_bytes = 0
+
+        async def _limited_receive() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message.get("type") == "http.request":
+                chunk = message.get("body", b"")
+                if isinstance(chunk, (bytes, bytearray)):
+                    received_bytes += len(chunk)
+                    if received_bytes > self._max_body_bytes:
+                        raise _RequestBodyTooLargeError()
+            return message
+
         try:
-            await self._app(scope, receive, _send_wrapper)
+            content_length_raw = headers.get("content-length")
+            if content_length_raw is not None:
+                try:
+                    content_length = int(content_length_raw.strip())
+                except ValueError:
+                    content_length = -1
+                if content_length > self._max_body_bytes:
+                    await _send_payload_too_large()
+                    return
+
+            await self._app(scope, _limited_receive, _send_wrapper)
+        except _RequestBodyTooLargeError:
+            if not response_started:
+                await _send_payload_too_large()
+            else:
+                raise
         finally:
             duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
             error_type = state.get("error_type")
@@ -126,8 +190,15 @@ def create_app(
         lifespan=lifespan,
     )
 
+    max_body_bytes = (
+        settings.max_request_body_bytes if settings is not None else DEFAULT_MAX_REQUEST_BODY_BYTES
+    )
     register_exception_handlers(fastapi_app)
-    fastapi_app.add_middleware(RequestContextMiddleware, logger=bootstrap_logger)
+    fastapi_app.add_middleware(
+        RequestContextMiddleware,
+        logger=bootstrap_logger,
+        max_body_bytes=max_body_bytes,
+    )
     fastapi_app.include_router(router)
     return fastapi_app
 

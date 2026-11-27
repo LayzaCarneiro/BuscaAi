@@ -96,3 +96,27 @@ def test_gemini_mldev_schema_omits_additional_properties():
     assert "additional_properties" not in keys
     prop_keys = _collect_keys(payload.get("properties", {}))
     assert {"models", "condition", "currency"}.issubset(prop_keys)
+
+
+def test_price_constraint_unbounded_normalization_and_bounded_preservation() -> None:
+    empty_weird = PriceConstraint(
+        min_price=None,
+        max_price=None,
+        min_inclusive=False,
+        max_inclusive=False,
+        is_hard_constraint=True,
+    )
+    assert empty_weird.min_inclusive is True
+    assert empty_weird.max_inclusive is True
+    assert empty_weird.is_hard_constraint is False
+
+    bounded = PriceConstraint(
+        min_price=100.0,
+        max_price=2500.0,
+        min_inclusive=False,
+        max_inclusive=False,
+        is_hard_constraint=True,
+    )
+    assert bounded.min_inclusive is False
+    assert bounded.max_inclusive is False
+    assert bounded.is_hard_constraint is True

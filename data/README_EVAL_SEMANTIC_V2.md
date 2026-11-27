@@ -1,4 +1,4 @@
-# Documentação do Dataset Semântico Controlado v2 (Etapa 11.1)
+# Documentação do Dataset Semântico Controlado v2
 
 > **Natureza dos dados:** **100% sintético**, criado exclusivamente para avaliação estruturada offline e benchmarking futuro do modelo `intfloat/multilingual-e5-small`. **Não contém títulos, preços, URLs, vendedores ou payloads persistidos de anúncios reais da eBay.**
 
@@ -14,7 +14,7 @@ Os dados são divididos em dois conjuntos estritamente disjuntos para evitar que
 | `data/eval_semantic_v2_evaluation.jsonl` | `evaluation` | **24** | **72** | Medição final cega pós-calibração (Precision@K, Recall@K, MRR, NDCG@K, Dedup Accuracy, False Dedup Rate, False Negative Rate) |
 | **Total v2** | — | **36** *(meta >= 30)* | **112** *(meta >= 100)* | Avaliação completa nas 4 categorias MVP |
 
-> O arquivo legado `data/eval_semantic_synthetic.jsonl` (`4` consultas, `6` pares) foi preservado intacto para manter compatibilidade com os testes da Etapa 4 (`tests/test_semantic_integration.py`).
+> O arquivo legado `data/eval_semantic_synthetic.jsonl` (`4` consultas, `6` pares) foi preservado intacto para manter compatibilidade com [`tests/test_semantic_integration.py`](../tests/test_semantic_integration.py).
 
 ---
 

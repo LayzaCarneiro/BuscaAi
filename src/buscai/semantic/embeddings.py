@@ -202,11 +202,15 @@ class SentenceTransformerEmbeddingProvider:
         model_name: str = RECOMMENDED_MODEL_NAME,
         *,
         device: str = "cpu",
+        cache_folder: str | None = None,
+        local_files_only: bool = False,
         model_loader: Callable[[str, str], Any] | None = None,
         dimension: int | None = None,
     ) -> None:
         self._info = resolve_model_spec(model_name, backend="sentence_transformers", dimension=dimension)
         self._device = device.strip() or "cpu"
+        self._cache_folder = cache_folder.strip() if isinstance(cache_folder, str) and cache_folder.strip() else None
+        self._local_files_only = bool(local_files_only)
         self._model_loader = model_loader
         self._model: Any = None
         self._load_lock = threading.Lock()
@@ -228,7 +232,12 @@ class SentenceTransformerEmbeddingProvider:
                 else:
                     from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
-                    loaded = SentenceTransformer(self._info.model_name, device=self._device)
+                    init_kwargs: dict[str, Any] = {"device": self._device}
+                    if self._cache_folder is not None:
+                        init_kwargs["cache_folder"] = self._cache_folder
+                    if self._local_files_only:
+                        init_kwargs["local_files_only"] = True
+                    loaded = SentenceTransformer(self._info.model_name, **init_kwargs)
             except ImportError as exc:
                 raise EmbeddingModelLoadError(
                     "Dependência opcional 'sentence-transformers' não instalada neste ambiente."
@@ -547,7 +556,11 @@ class EmbeddingService:
         if settings.embedding_backend == "fastembed":
             chosen: EmbeddingProvider = FastEmbedEmbeddingProvider(model_name=settings.embedding_model_name)
         else:
-            chosen = SentenceTransformerEmbeddingProvider(model_name=settings.embedding_model_name)
+            chosen = SentenceTransformerEmbeddingProvider(
+                model_name=settings.embedding_model_name,
+                cache_folder=settings.embedding_cache_dir,
+                local_files_only=settings.embedding_local_files_only,
+            )
         return cls(provider=chosen, batch_size=settings.embedding_batch_size, logger=logger)
 
     def embed_query(self, query_text: str, *, request_id: str | None = None) -> np.ndarray:

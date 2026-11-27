@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from buscai.api import create_app
+from buscai.api.app import RequestContextMiddleware
 from buscai.config import load_settings
 from buscai.observability import ALLOWED_LOG_FIELDS, configure_logging
 from buscai.orchestration import OrchestrationDependencies, SearchOrchestrator
@@ -35,7 +37,14 @@ _SENTINEL_SELLER = "sentinel_seller_pii"
 
 
 class _SentinelExtractor:
-    def extract(self, user_text: str) -> UserIntent:
+    def extract(
+        self,
+        user_text: str,
+        *,
+        conversation_history=None,
+        request_id: str | None = None,
+    ) -> UserIntent:
+        del conversation_history, request_id
         if "monitor" in user_text.casefold():
             return UserIntent(category="monitor", query=user_text)
         return UserIntent(category="notebook", query=user_text)
@@ -85,7 +94,12 @@ class _SentinelBackend:
         return None
 
 
-def _build_secure_app(*, fail_on_keyword: str | None = None, max_rpm: int = 100):
+def _build_secure_app(
+    *,
+    fail_on_keyword: str | None = None,
+    max_rpm: int = 100,
+    max_body_bytes: int | None = None,
+):
     converter = CurrencyConverter(FixedEnvExchangeRateProvider(rate=Decimal("5.50")))
     emb = EmbeddingService(DeterministicStubEmbeddingProvider())
     emb.embed_queries(["warmup"])
@@ -102,12 +116,13 @@ def _build_secure_app(*, fail_on_keyword: str | None = None, max_rpm: int = 100)
     orch = SearchOrchestrator(deps)
     stream = io.StringIO()
     logger = configure_logging("INFO", stream=stream, logger_name="buscai.test.security")
-    settings = load_settings(
-        environ={
-            "BUSCAAI_API_KEYS": _API_KEY,
-            "BUSCAAI_RATE_LIMIT_PER_MINUTE": str(max_rpm),
-        }
-    )
+    env: dict[str, str] = {
+        "BUSCAAI_API_KEYS": _API_KEY,
+        "BUSCAAI_RATE_LIMIT_PER_MINUTE": str(max_rpm),
+    }
+    if max_body_bytes is not None:
+        env["BUSCAAI_MAX_REQUEST_BODY_BYTES"] = str(max_body_bytes)
+    settings = load_settings(environ=env)
     app = create_app(settings=settings, orchestrator=orch, preload_embeddings=False, logger=logger)
     return app, stream, backend
 
@@ -239,3 +254,170 @@ def test_concurrent_requests_remain_isolated_with_shared_orchestrator_and_indepe
         else:
             assert status_code == 200
             assert tag == "monitor"
+
+
+def test_api_rejects_oversized_body_with_413_by_content_length_and_streaming() -> None:
+    log_stream = io.StringIO()
+    app, _stream, _backend = _build_secure_app(max_body_bytes=2048)
+    del log_stream
+    giant_text = "x" * 3000
+
+    with TestClient(app) as client:
+        ok_resp = client.post(
+            "/v1/search",
+            headers={"X-API-Key": _API_KEY, "X-Request-ID": "req-ok-small"},
+            json={"query": "notebook lenovo 16gb"},
+        )
+        assert ok_resp.status_code == 200
+
+        search_413 = client.post(
+            "/v1/search",
+            headers={"X-API-Key": _API_KEY, "X-Request-ID": "req-413-search"},
+            json={"query": giant_text},
+        )
+        chat_413 = client.post(
+            "/v1/chat",
+            headers={"X-API-Key": _API_KEY, "X-Request-ID": "req-413-chat"},
+            json={"message": giant_text},
+        )
+
+    for resp, expected_id in ((search_413, "req-413-search"), (chat_413, "req-413-chat")):
+        assert resp.status_code == 413
+        assert resp.headers["X-Request-ID"] == expected_id
+        body = resp.json()
+        assert body["error"]["code"] == "payload_too_large"
+        assert body["error"]["request_id"] == expected_id
+        assert giant_text not in resp.text
+        assert "Traceback" not in resp.text
+
+    async def _run_chunked_middleware_case() -> tuple[int, dict[str, str], dict[str, object]]:
+        async def _inner_app(scope, receive, send) -> None:
+            del scope, send
+            while True:
+                msg = await receive()
+                if not msg.get("more_body", False):
+                    break
+
+        mw_logger = configure_logging("INFO", stream=io.StringIO(), logger_name="buscai.test.mw413")
+        middleware = RequestContextMiddleware(_inner_app, logger=mw_logger, max_body_bytes=1024)
+        chunks = [
+            {"type": "http.request", "body": b"a" * 600, "more_body": True},
+            {"type": "http.request", "body": b"b" * 600, "more_body": False},
+        ]
+
+        async def _receive():
+            return chunks.pop(0) if chunks else {"type": "http.request", "body": b"", "more_body": False}
+
+        sent: list[dict[str, object]] = []
+
+        async def _send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/search",
+            "headers": [(b"x-request-id", b"req-stream-413")],
+        }
+        await middleware(scope, _receive, _send)  # type: ignore[arg-type]
+        start_msg = sent[0]
+        body_msg = sent[1]
+        hdrs = {
+            k.decode("latin-1").lower(): v.decode("latin-1")
+            for k, v in start_msg["headers"]  # type: ignore[attr-defined]
+        }
+        payload = json.loads(bytes(body_msg["body"]).decode("utf-8"))  # type: ignore[arg-type]
+        return int(start_msg["status"]), hdrs, payload  # type: ignore[arg-type]
+
+    status_chunked, hdrs_chunked, payload_chunked = asyncio.run(_run_chunked_middleware_case())
+    assert status_chunked == 413
+    assert hdrs_chunked["x-request-id"] == "req-stream-413"
+    assert hdrs_chunked["cache-control"] == "no-store"
+    assert payload_chunked["error"]["code"] == "payload_too_large"  # type: ignore[index]
+
+
+def test_api_sets_defensive_security_headers_and_no_store_on_v1_routes() -> None:
+    app, _stream, _backend = _build_secure_app(max_body_bytes=1024)
+    with TestClient(app) as client:
+        responses = [
+            client.get("/v1/health"),
+            client.post("/v1/search", headers={"X-API-Key": _API_KEY}, json={"query": "notebook"}),
+            client.post("/v1/chat", headers={"X-API-Key": _API_KEY}, json={"message": "notebook"}),
+            client.post("/v1/search", json={"query": "notebook"}),  # 401
+            client.post("/v1/search", headers={"X-API-Key": _API_KEY}, json={"query": ""}),  # 422
+            client.post("/v1/search", headers={"X-API-Key": _API_KEY}, json={"query": "z" * 1500}),  # 413
+            client.get("/v1/inexistente"),  # 404
+        ]
+
+    expected_codes = [200, 200, 200, 401, 422, 413, 404]
+    assert [r.status_code for r in responses] == expected_codes
+    for resp in responses:
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+        assert resp.headers["X-Frame-Options"] == "DENY"
+        assert resp.headers["Referrer-Policy"] == "no-referrer"
+        assert resp.headers["Cache-Control"] == "no-store"
+
+
+def test_api_malformed_inputs_headers_and_zero_stack_or_secret_exposure() -> None:
+    app, stream, _backend = _build_secure_app()
+    leaked_secret_pattern = "GEMINI_API_KEY=segredo_super_999"
+
+    with TestClient(app) as client:
+        bad_json = client.post(
+            "/v1/search",
+            headers={"X-API-Key": _API_KEY, "Content-Type": "application/json"},
+            content=b"{malformed",
+        )
+        empty_body = client.post(
+            "/v1/search",
+            headers={"X-API-Key": _API_KEY, "Content-Type": "application/json"},
+            content=b"",
+        )
+        wrong_ct = client.post(
+            "/v1/search",
+            headers={"X-API-Key": _API_KEY, "Content-Type": "text/plain"},
+            content=b"query=notebook",
+        )
+        method_405 = client.put("/v1/search", headers={"X-API-Key": _API_KEY}, json={"query": "notebook"})
+        not_found_404 = client.get("/v1/nao-existe")
+        space_key = client.post("/v1/search", headers={"X-API-Key": "   "}, json={"query": "notebook"})
+        placeholder_key = client.post(
+            "/v1/search",
+            headers={"X-API-Key": "chave_cliente_1"},
+            json={"query": "notebook"},
+        )
+        secret_in_validation = client.post(
+            "/v1/search",
+            headers={"X-API-Key": _API_KEY},
+            json={"query": "notebook", "profile_id": leaked_secret_pattern},
+        )
+
+    assert bad_json.status_code == 422
+    assert empty_body.status_code == 422
+    assert wrong_ct.status_code == 422
+    assert method_405.status_code == 405
+    assert method_405.json()["error"]["code"] == "method_not_allowed"
+    assert not_found_404.status_code == 404
+    assert not_found_404.json()["error"]["code"] == "not_found"
+    assert space_key.status_code == 401
+    assert placeholder_key.status_code == 401
+    assert secret_in_validation.status_code == 422
+    assert "segredo_super_999" not in secret_in_validation.text
+    assert "[REDACTED]" in secret_in_validation.text
+
+    for resp in (
+        bad_json,
+        empty_body,
+        wrong_ct,
+        method_405,
+        not_found_404,
+        space_key,
+        placeholder_key,
+        secret_in_validation,
+    ):
+        assert "Traceback" not in resp.text
+        assert ".py" not in resp.text
+        assert _API_KEY not in resp.text
+
+    assert _API_KEY not in stream.getvalue()
+    assert "segredo_super_999" not in stream.getvalue()
